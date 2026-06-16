@@ -85,6 +85,10 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       { property: "og:description", content: "Manage every WordPress and WooCommerce site from one dashboard." },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary" },
+      { name: "twitter:title", content: "WP Control Hub" },
+      { name: "twitter:description", content: "Manage every WordPress and WooCommerce site from one dashboard." },
+      { property: "og:image", content: "https://storage.googleapis.com/gpt-engineer-file-uploads/attachments/og-images/40e81213-b7c4-456b-9227-e1072dddc5c6" },
+      { name: "twitter:image", content: "https://storage.googleapis.com/gpt-engineer-file-uploads/attachments/og-images/40e81213-b7c4-456b-9227-e1072dddc5c6" },
     ],
     links: [
       { rel: "stylesheet", href: appCss },
