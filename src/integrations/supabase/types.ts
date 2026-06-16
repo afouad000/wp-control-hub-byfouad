@@ -14,16 +14,192 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      audit_logs: {
+        Row: {
+          action: string
+          created_at: string
+          details: Json
+          id: string
+          user_id: string | null
+          website_id: string | null
+        }
+        Insert: {
+          action: string
+          created_at?: string
+          details?: Json
+          id?: string
+          user_id?: string | null
+          website_id?: string | null
+        }
+        Update: {
+          action?: string
+          created_at?: string
+          details?: Json
+          id?: string
+          user_id?: string | null
+          website_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "audit_logs_website_id_fkey"
+            columns: ["website_id"]
+            isOneToOne: false
+            referencedRelation: "websites"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      profiles: {
+        Row: {
+          avatar_url: string | null
+          created_at: string
+          email: string | null
+          full_name: string | null
+          id: string
+          updated_at: string
+        }
+        Insert: {
+          avatar_url?: string | null
+          created_at?: string
+          email?: string | null
+          full_name?: string | null
+          id: string
+          updated_at?: string
+        }
+        Update: {
+          avatar_url?: string | null
+          created_at?: string
+          email?: string | null
+          full_name?: string | null
+          id?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      user_roles: {
+        Row: {
+          id: string
+          role: Database["public"]["Enums"]["app_role"]
+          user_id: string
+        }
+        Insert: {
+          id?: string
+          role: Database["public"]["Enums"]["app_role"]
+          user_id: string
+        }
+        Update: {
+          id?: string
+          role?: Database["public"]["Enums"]["app_role"]
+          user_id?: string
+        }
+        Relationships: []
+      }
+      website_members: {
+        Row: {
+          created_at: string
+          id: string
+          permission: string
+          user_id: string
+          website_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          permission?: string
+          user_id: string
+          website_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          permission?: string
+          user_id?: string
+          website_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "website_members_website_id_fkey"
+            columns: ["website_id"]
+            isOneToOne: false
+            referencedRelation: "websites"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      websites: {
+        Row: {
+          client_name: string | null
+          created_at: string
+          id: string
+          last_checked_at: string | null
+          logo_url: string | null
+          meta: Json
+          name: string
+          owner_id: string
+          status: string
+          updated_at: string
+          url: string
+          wc_consumer_key: string | null
+          wc_consumer_secret: string | null
+          wp_app_password: string | null
+          wp_username: string | null
+        }
+        Insert: {
+          client_name?: string | null
+          created_at?: string
+          id?: string
+          last_checked_at?: string | null
+          logo_url?: string | null
+          meta?: Json
+          name: string
+          owner_id: string
+          status?: string
+          updated_at?: string
+          url: string
+          wc_consumer_key?: string | null
+          wc_consumer_secret?: string | null
+          wp_app_password?: string | null
+          wp_username?: string | null
+        }
+        Update: {
+          client_name?: string | null
+          created_at?: string
+          id?: string
+          last_checked_at?: string | null
+          logo_url?: string | null
+          meta?: Json
+          name?: string
+          owner_id?: string
+          status?: string
+          updated_at?: string
+          url?: string
+          wc_consumer_key?: string | null
+          wc_consumer_secret?: string | null
+          wp_app_password?: string | null
+          wp_username?: string | null
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      can_access_website: {
+        Args: { _user: string; _website: string }
+        Returns: boolean
+      }
+      has_role: {
+        Args: {
+          _role: Database["public"]["Enums"]["app_role"]
+          _user_id: string
+        }
+        Returns: boolean
+      }
+      is_super_admin: { Args: { _user_id: string }; Returns: boolean }
     }
     Enums: {
-      [_ in never]: never
+      app_role: "super_admin" | "client" | "team_member"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -150,6 +326,8 @@ export type CompositeTypes<
 
 export const Constants = {
   public: {
-    Enums: {},
+    Enums: {
+      app_role: ["super_admin", "client", "team_member"],
+    },
   },
 } as const
