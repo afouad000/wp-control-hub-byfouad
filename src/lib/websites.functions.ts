@@ -87,8 +87,9 @@ export const updateWebsite = createServerFn({ method: "POST" })
   .inputValidator((d) => UpdateInput.parse(d))
   .handler(async ({ data, context }) => {
     const { id, ...patch } = data;
-    const cleaned = Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== undefined));
-    const { error } = await context.supabase.from("websites").update(cleaned).eq("id", id);
+    const cleaned: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(patch)) if (v !== undefined) cleaned[k] = v;
+    const { error } = await context.supabase.from("websites").update(cleaned as never).eq("id", id);
     if (error) throw new Error(error.message);
     await context.supabase.from("audit_logs").insert({
       user_id: context.userId,
@@ -239,14 +240,23 @@ async function probeSite(
 
 const SiteScoped = z.object({ website_id: z.string().uuid() });
 
-async function getCreds(context: { supabase: { from: (t: string) => { select: (s: string) => { eq: (c: string, v: string) => { maybeSingle: () => Promise<{ data: { url: string; wp_username: string | null; wp_app_password: string | null; wc_consumer_key: string | null; wc_consumer_secret: string | null } | null; error: { message: string } | null }> } } } } }, id: string) {
+type Creds = {
+  url: string;
+  wp_username: string | null;
+  wp_app_password: string | null;
+  wc_consumer_key: string | null;
+  wc_consumer_secret: string | null;
+};
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function getCreds(context: any, id: string): Promise<Creds> {
   const { data, error } = await context.supabase
     .from("websites")
     .select("url, wp_username, wp_app_password, wc_consumer_key, wc_consumer_secret")
     .eq("id", id)
     .maybeSingle();
   if (error || !data) throw new Error(error?.message ?? "Not found");
-  return data;
+  return data as Creds;
 }
 
 export const fetchPosts = createServerFn({ method: "GET" })
