@@ -89,6 +89,7 @@ function WebsiteDetail() {
               <a href={site.url} target="_blank" rel="noreferrer"><ExternalLink className="mr-2 h-4 w-4" /> Visit</a>
             </Button>
             <Button variant="outline" size="sm" onClick={onRefresh}><RefreshCw className="mr-2 h-4 w-4" /> Refresh</Button>
+            <ReconnectButton site={site} />
             <Button variant="outline" size="sm" onClick={onDelete} className="text-destructive">
               <Trash2 className="mr-2 h-4 w-4" /> Disconnect
             </Button>
@@ -97,18 +98,15 @@ function WebsiteDetail() {
       />
 
       <div className="flex flex-wrap items-center gap-2">
-        {site.status === "connected" ? (
-          <Badge variant="outline" className="border-success/40 text-success">
-            <CheckCircle2 className="mr-1 h-3 w-3" /> Connected
-          </Badge>
-        ) : (
-          <Badge variant="outline" className="border-destructive/40 text-destructive">
-            <AlertCircle className="mr-1 h-3 w-3" /> {site.status}
-          </Badge>
-        )}
-        {m.woocommerce ? <Badge variant="secondary">WooCommerce active</Badge> : <Badge variant="outline">No WooCommerce</Badge>}
+        <ConnectionBadge status={site.connection_status ?? site.status} />
+        {m.woocommerce ? <Badge variant="secondary">WooCommerce active</Badge> : null}
         {m.theme ? <Badge variant="outline">Theme: {m.theme}</Badge> : null}
         {m.plugins_count !== undefined ? <Badge variant="outline">{m.plugins_count} plugins</Badge> : null}
+        {site.last_error ? (
+          <Badge variant="outline" className="border-destructive/40 text-destructive max-w-md truncate" title={site.last_error}>
+            {site.last_error}
+          </Badge>
+        ) : null}
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
