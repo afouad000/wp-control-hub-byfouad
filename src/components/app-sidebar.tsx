@@ -1,31 +1,24 @@
 import { Link, useRouterState } from "@tanstack/react-router";
 import {
-  LayoutDashboard,
-  Globe,
-  Plus,
-  Users,
-  Activity,
-  Settings,
-  ShoppingBag,
+  LayoutDashboard, Globe, Plus, Users, Activity, Settings,
+  ShoppingBag, ShoppingCart, Package,
 } from "lucide-react";
 import {
-  Sidebar,
-  SidebarContent,
-  SidebarFooter,
-  SidebarGroup,
-  SidebarGroupContent,
-  SidebarGroupLabel,
-  SidebarHeader,
-  SidebarMenu,
-  SidebarMenuButton,
-  SidebarMenuItem,
+  Sidebar, SidebarContent, SidebarFooter, SidebarGroup, SidebarGroupContent,
+  SidebarGroupLabel, SidebarHeader, SidebarMenu, SidebarMenuButton, SidebarMenuItem,
 } from "@/components/ui/sidebar";
 
-const nav = [
+const overview = [
   { title: "Dashboard", url: "/dashboard", icon: LayoutDashboard },
+  { title: "Stores overview", url: "/stores", icon: ShoppingBag },
+];
+const manage = [
   { title: "Websites", url: "/websites", icon: Globe },
   { title: "Add website", url: "/websites/new", icon: Plus },
-  { title: "Stores overview", url: "/stores", icon: ShoppingBag },
+  { title: "Orders", url: "/orders", icon: ShoppingCart },
+  { title: "Products", url: "/products", icon: Package },
+];
+const account = [
   { title: "Users & roles", url: "/users", icon: Users },
   { title: "Activity logs", url: "/activity", icon: Activity },
   { title: "Settings", url: "/settings", icon: Settings },
@@ -33,6 +26,27 @@ const nav = [
 
 export function AppSidebar() {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
+  const isActive = (url: string) => (url === "/dashboard" ? pathname === "/dashboard" : pathname.startsWith(url));
+
+  const renderGroup = (label: string, items: typeof overview) => (
+    <SidebarGroup>
+      <SidebarGroupLabel>{label}</SidebarGroupLabel>
+      <SidebarGroupContent>
+        <SidebarMenu>
+          {items.map((item) => (
+            <SidebarMenuItem key={item.url}>
+              <SidebarMenuButton asChild isActive={isActive(item.url)} tooltip={item.title}>
+                <Link to={item.url}>
+                  <item.icon className="h-4 w-4" />
+                  <span>{item.title}</span>
+                </Link>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          ))}
+        </SidebarMenu>
+      </SidebarGroupContent>
+    </SidebarGroup>
+  );
 
   return (
     <Sidebar collapsible="icon">
@@ -49,29 +63,9 @@ export function AppSidebar() {
       </SidebarHeader>
 
       <SidebarContent>
-        <SidebarGroup>
-          <SidebarGroupLabel>Workspace</SidebarGroupLabel>
-          <SidebarGroupContent>
-            <SidebarMenu>
-              {nav.map((item) => {
-                const active =
-                  item.url === "/dashboard"
-                    ? pathname === "/dashboard"
-                    : pathname.startsWith(item.url);
-                return (
-                  <SidebarMenuItem key={item.url}>
-                    <SidebarMenuButton asChild isActive={active} tooltip={item.title}>
-                      <Link to={item.url}>
-                        <item.icon className="h-4 w-4" />
-                        <span>{item.title}</span>
-                      </Link>
-                    </SidebarMenuButton>
-                  </SidebarMenuItem>
-                );
-              })}
-            </SidebarMenu>
-          </SidebarGroupContent>
-        </SidebarGroup>
+        {renderGroup("Overview", overview)}
+        {renderGroup("Manage", manage)}
+        {renderGroup("Account", account)}
       </SidebarContent>
 
       <SidebarFooter className="border-t">
