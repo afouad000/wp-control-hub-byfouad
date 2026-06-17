@@ -1,21 +1,27 @@
 import { createFileRoute, Link, useParams, useNavigate } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
+import { useState } from "react";
 import {
   ArrowLeft, ExternalLink, RefreshCw, Trash2, Globe, ShoppingCart, Package, Users as UsersIcon,
-  AlertCircle, CheckCircle2,
+  KeyRound, Loader2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { StatCard } from "@/components/stat-card";
 import { PageHeader, EmptyState } from "@/components/page-header";
+import { ConnectionBadge } from "@/components/connection-badge";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
 import {
-  getWebsite, refreshWebsite, deleteWebsite, fetchPosts, fetchProducts, fetchOrders,
+  getWebsite, refreshWebsite, deleteWebsite, reconnectWebsite,
+  fetchPosts, fetchProducts, fetchOrders,
 } from "@/lib/websites.functions";
 import { toast } from "sonner";
 
@@ -83,6 +89,7 @@ function WebsiteDetail() {
               <a href={site.url} target="_blank" rel="noreferrer"><ExternalLink className="mr-2 h-4 w-4" /> Visit</a>
             </Button>
             <Button variant="outline" size="sm" onClick={onRefresh}><RefreshCw className="mr-2 h-4 w-4" /> Refresh</Button>
+            <ReconnectButton site={site} />
             <Button variant="outline" size="sm" onClick={onDelete} className="text-destructive">
               <Trash2 className="mr-2 h-4 w-4" /> Disconnect
             </Button>
@@ -91,18 +98,15 @@ function WebsiteDetail() {
       />
 
       <div className="flex flex-wrap items-center gap-2">
-        {site.status === "connected" ? (
-          <Badge variant="outline" className="border-success/40 text-success">
-            <CheckCircle2 className="mr-1 h-3 w-3" /> Connected
-          </Badge>
-        ) : (
-          <Badge variant="outline" className="border-destructive/40 text-destructive">
-            <AlertCircle className="mr-1 h-3 w-3" /> {site.status}
-          </Badge>
-        )}
-        {m.woocommerce ? <Badge variant="secondary">WooCommerce active</Badge> : <Badge variant="outline">No WooCommerce</Badge>}
+        <ConnectionBadge status={site.connection_status ?? site.status} />
+        {m.woocommerce ? <Badge variant="secondary">WooCommerce active</Badge> : null}
         {m.theme ? <Badge variant="outline">Theme: {m.theme}</Badge> : null}
         {m.plugins_count !== undefined ? <Badge variant="outline">{m.plugins_count} plugins</Badge> : null}
+        {site.last_error ? (
+          <Badge variant="outline" className="border-destructive/40 text-destructive max-w-md truncate" title={site.last_error}>
+            {site.last_error}
+          </Badge>
+        ) : null}
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
@@ -157,6 +161,63 @@ function Row({ label, value }: { label: string; value: React.ReactNode }) {
       <span className="text-muted-foreground">{label}</span>
       <span className="font-medium">{value}</span>
     </div>
+  );
+}
+
+function ReconnectButton({ site }: { site: { id: string; url: string; wp_username: string | null } }) {
+  const reconnect = useServerFn(reconnectWebsite);
+  const qc = useQueryClient();
+  const [open, setOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [url, setUrl] = useState(site.url);
+  const [user, setUser] = useState(site.wp_username ?? "");
+  const [pass, setPass] = useState("");
+  const [ck, setCk] = useState("");
+  const [cs, setCs] = useState("");
+
+  const submit = async () => {
+    setSaving(true);
+    try {
+      await reconnect({
+        data: { id: site.id, url, wp_username: user, wp_app_password: pass, wc_consumer_key: ck || null, wc_consumer_secret: cs || null },
+      });
+      toast.success("Credentials updated");
+      qc.invalidateQueries({ queryKey: ["website", site.id] });
+      qc.invalidateQueries({ queryKey: ["websites"] });
+      setOpen(false);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Update failed");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <Button variant="outline" size="sm" onClick={() => setOpen(true)}>
+        <KeyRound className="mr-2 h-4 w-4" /> Reconnect
+      </Button>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Update credentials</DialogTitle>
+          <DialogDescription>We'll test the new credentials before saving. Invalid keys won't overwrite the current ones.</DialogDescription>
+        </DialogHeader>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div className="space-y-1.5 sm:col-span-2"><Label>WordPress URL</Label><Input value={url} onChange={(e) => setUrl(e.target.value)} /></div>
+          <div className="space-y-1.5"><Label>WP username</Label><Input value={user} onChange={(e) => setUser(e.target.value)} /></div>
+          <div className="space-y-1.5"><Label>Application password</Label><Input type="password" value={pass} onChange={(e) => setPass(e.target.value)} /></div>
+          <div className="space-y-1.5"><Label>WC Consumer key</Label><Input value={ck} onChange={(e) => setCk(e.target.value)} placeholder="ck_…" /></div>
+          <div className="space-y-1.5"><Label>WC Consumer secret</Label><Input type="password" value={cs} onChange={(e) => setCs(e.target.value)} placeholder="cs_…" /></div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
+          <Button onClick={submit} disabled={saving || !url || !user || !pass}>
+            {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+            Test & save
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
