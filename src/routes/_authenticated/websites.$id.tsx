@@ -164,6 +164,63 @@ function Row({ label, value }: { label: string; value: React.ReactNode }) {
   );
 }
 
+function ReconnectButton({ site }: { site: { id: string; url: string; wp_username: string | null } }) {
+  const reconnect = useServerFn(reconnectWebsite);
+  const qc = useQueryClient();
+  const [open, setOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [url, setUrl] = useState(site.url);
+  const [user, setUser] = useState(site.wp_username ?? "");
+  const [pass, setPass] = useState("");
+  const [ck, setCk] = useState("");
+  const [cs, setCs] = useState("");
+
+  const submit = async () => {
+    setSaving(true);
+    try {
+      await reconnect({
+        data: { id: site.id, url, wp_username: user, wp_app_password: pass, wc_consumer_key: ck || null, wc_consumer_secret: cs || null },
+      });
+      toast.success("Credentials updated");
+      qc.invalidateQueries({ queryKey: ["website", site.id] });
+      qc.invalidateQueries({ queryKey: ["websites"] });
+      setOpen(false);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Update failed");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <Button variant="outline" size="sm" onClick={() => setOpen(true)}>
+        <KeyRound className="mr-2 h-4 w-4" /> Reconnect
+      </Button>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Update credentials</DialogTitle>
+          <DialogDescription>We'll test the new credentials before saving. Invalid keys won't overwrite the current ones.</DialogDescription>
+        </DialogHeader>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div className="space-y-1.5 sm:col-span-2"><Label>WordPress URL</Label><Input value={url} onChange={(e) => setUrl(e.target.value)} /></div>
+          <div className="space-y-1.5"><Label>WP username</Label><Input value={user} onChange={(e) => setUser(e.target.value)} /></div>
+          <div className="space-y-1.5"><Label>Application password</Label><Input type="password" value={pass} onChange={(e) => setPass(e.target.value)} /></div>
+          <div className="space-y-1.5"><Label>WC Consumer key</Label><Input value={ck} onChange={(e) => setCk(e.target.value)} placeholder="ck_…" /></div>
+          <div className="space-y-1.5"><Label>WC Consumer secret</Label><Input type="password" value={cs} onChange={(e) => setCs(e.target.value)} placeholder="cs_…" /></div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
+          <Button onClick={submit} disabled={saving || !url || !user || !pass}>
+            {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+            Test & save
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function PostsPanel({ websiteId }: { websiteId: string }) {
   const fn = useServerFn(fetchPosts);
   const { data, isLoading } = useQuery({
