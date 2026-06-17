@@ -129,9 +129,11 @@ export type Database = {
       websites: {
         Row: {
           client_name: string | null
+          connection_status: string
           created_at: string
           id: string
           last_checked_at: string | null
+          last_error: string | null
           logo_url: string | null
           meta: Json
           name: string
@@ -146,9 +148,11 @@ export type Database = {
         }
         Insert: {
           client_name?: string | null
+          connection_status?: string
           created_at?: string
           id?: string
           last_checked_at?: string | null
+          last_error?: string | null
           logo_url?: string | null
           meta?: Json
           name: string
@@ -163,9 +167,11 @@ export type Database = {
         }
         Update: {
           client_name?: string | null
+          connection_status?: string
           created_at?: string
           id?: string
           last_checked_at?: string | null
+          last_error?: string | null
           logo_url?: string | null
           meta?: Json
           name?: string
