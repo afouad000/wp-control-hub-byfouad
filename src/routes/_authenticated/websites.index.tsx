@@ -2,12 +2,13 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { useState } from "react";
-import { Globe, Plus, Search, ExternalLink, AlertCircle, CheckCircle2 } from "lucide-react";
+import { Globe, Plus, Search, ExternalLink } from "lucide-react";
 import { PageHeader, EmptyState } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { ConnectionBadge } from "@/components/connection-badge";
 import { listWebsites } from "@/lib/websites.functions";
 
 export const Route = createFileRoute("/_authenticated/websites/")({
