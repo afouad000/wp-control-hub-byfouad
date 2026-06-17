@@ -71,15 +71,7 @@ function WebsitesList() {
                     <div className="grid h-9 w-9 place-items-center rounded-md border bg-muted/40">
                       <Globe className="h-4 w-4" />
                     </div>
-                    {s.status === "connected" ? (
-                      <Badge variant="outline" className="border-success/40 text-success">
-                        <CheckCircle2 className="mr-1 h-3 w-3" /> Live
-                      </Badge>
-                    ) : (
-                      <Badge variant="outline" className="border-destructive/40 text-destructive">
-                        <AlertCircle className="mr-1 h-3 w-3" /> {s.status}
-                      </Badge>
-                    )}
+                    <ConnectionBadge status={s.connection_status ?? s.status} />
                   </div>
                   <div className="mt-3 truncate font-medium">{s.name}</div>
                   <div className="flex items-center gap-1 truncate text-xs text-muted-foreground">
