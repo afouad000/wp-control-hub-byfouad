@@ -204,7 +204,7 @@ export const refreshWebsite = createServerFn({ method: "POST" })
         connection_status: probe.ok ? (probe.info.woocommerce ? "connected" : "connected_no_wc") : "error",
         last_checked_at: new Date().toISOString(),
         last_error: probe.ok ? null : probe.error ?? "Unknown error",
-        meta: probe.ok ? probe.info : (site as { meta?: unknown }).meta ?? {},
+        ...(probe.ok ? { meta: probe.info } : {}),
       })
       .eq("id", data.id);
     return probe;
