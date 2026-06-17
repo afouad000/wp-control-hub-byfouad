@@ -1,21 +1,27 @@
 import { createFileRoute, Link, useParams, useNavigate } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
+import { useState } from "react";
 import {
   ArrowLeft, ExternalLink, RefreshCw, Trash2, Globe, ShoppingCart, Package, Users as UsersIcon,
-  AlertCircle, CheckCircle2,
+  KeyRound, Loader2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { StatCard } from "@/components/stat-card";
 import { PageHeader, EmptyState } from "@/components/page-header";
+import { ConnectionBadge } from "@/components/connection-badge";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
 import {
-  getWebsite, refreshWebsite, deleteWebsite, fetchPosts, fetchProducts, fetchOrders,
+  getWebsite, refreshWebsite, deleteWebsite, reconnectWebsite,
+  fetchPosts, fetchProducts, fetchOrders,
 } from "@/lib/websites.functions";
 import { toast } from "sonner";
 
