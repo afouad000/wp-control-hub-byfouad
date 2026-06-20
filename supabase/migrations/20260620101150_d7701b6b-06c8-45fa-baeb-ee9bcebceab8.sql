@@ -1,0 +1,2 @@
+CREATE OR REPLACE FUNCTION public.debug_uid_sd() RETURNS uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path='public','pg_temp' AS $$ SELECT auth.uid() $$;
+GRANT EXECUTE ON FUNCTION public.debug_uid_sd() TO authenticated;

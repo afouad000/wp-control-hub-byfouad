@@ -196,6 +196,7 @@ export type Database = {
         Returns: boolean
       }
       debug_uid: { Args: never; Returns: string }
+      debug_uid_sd: { Args: never; Returns: string }
       has_role: {
         Args: {
           _role: Database["public"]["Enums"]["app_role"]
