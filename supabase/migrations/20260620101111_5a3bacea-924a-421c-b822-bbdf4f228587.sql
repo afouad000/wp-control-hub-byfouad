@@ -1,0 +1,2 @@
+CREATE OR REPLACE FUNCTION public.debug_uid() RETURNS uuid LANGUAGE sql STABLE SECURITY INVOKER SET search_path='' AS $$ SELECT auth.uid() $$;
+GRANT EXECUTE ON FUNCTION public.debug_uid() TO authenticated;
