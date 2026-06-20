@@ -156,7 +156,7 @@ export type Database = {
           logo_url?: string | null
           meta?: Json
           name: string
-          owner_id: string
+          owner_id?: string
           status?: string
           updated_at?: string
           url: string
