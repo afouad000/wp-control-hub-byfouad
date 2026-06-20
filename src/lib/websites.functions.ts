@@ -66,6 +66,10 @@ export const connectWebsite = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d) => ConnectInput.parse(d))
   .handler(async ({ data, context }) => {
+    if (!context.userId) {
+      throw new Error("Unauthorized: no authenticated user in session.");
+    }
+
     const probe = await probeSite(data.url, data.wp_username, data.wp_app_password, data.wc_consumer_key, data.wc_consumer_secret);
     if (!probe.ok) {
       // Refuse to save invalid credentials per spec
@@ -75,7 +79,7 @@ export const connectWebsite = createServerFn({ method: "POST" })
     const { data: inserted, error } = await context.supabase
       .from("websites")
       .insert({
-        owner_id: context.userId,
+        owner_id: context.userId, // server-set; never trust the client
         name: data.name,
         url: data.url.replace(/\/$/, ""),
         client_name: data.client_name ?? null,
@@ -92,7 +96,34 @@ export const connectWebsite = createServerFn({ method: "POST" })
       })
       .select(PUBLIC_COLUMNS)
       .single();
-    if (error) throw new Error(error.message);
+
+    if (error) {
+      // Debug context — never log credentials or secrets
+      console.error("[connectWebsite] insert failed", {
+        userExists: Boolean(context.userId),
+        userId: context.userId,
+        attemptedOwnerId: context.userId,
+        code: (error as { code?: string }).code,
+        message: error.message,
+        details: (error as { details?: string }).details,
+        hint: (error as { hint?: string }).hint,
+      });
+      throw new Error(error.message);
+    }
+
+    // Owner membership row (best-effort; ignore unique-constraint conflicts)
+    const { error: memberError } = await context.supabase.from("website_members").insert({
+      website_id: inserted.id,
+      user_id: context.userId,
+      permission: "owner",
+    });
+    if (memberError && !/duplicate|unique/i.test(memberError.message)) {
+      console.error("[connectWebsite] member insert failed", {
+        websiteId: inserted.id,
+        userId: context.userId,
+        message: memberError.message,
+      });
+    }
 
     await context.supabase.from("audit_logs").insert({
       user_id: context.userId,
