@@ -1,6 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
+import { assertAuthenticatedContext, friendlyDbError } from "./server-guards";
 
 const PUBLIC_COLUMNS =
   "id, owner_id, name, url, client_name, logo_url, status, connection_status, last_checked_at, last_error, meta, created_at, updated_at, wp_username";
@@ -66,16 +67,18 @@ export const connectWebsite = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d) => ConnectInput.parse(d))
   .handler(async ({ data, context }) => {
-    if (!context.userId) {
-      throw new Error("Unauthorized: no authenticated user in session.");
-    }
+    // Defensive: middleware already enforces this, but we re-assert so the
+    // invariant `owner_id = auth.uid()` is impossible to bypass and so any
+    // future refactor that drops the middleware fails loudly instead of
+    // silently widening RLS. Also rejects service-role tokens.
+    assertAuthenticatedContext(context);
 
     const probe = await probeSite(data.url, data.wp_username, data.wp_app_password, data.wc_consumer_key, data.wc_consumer_secret);
     if (!probe.ok) {
-      // Refuse to save invalid credentials per spec
       throw new Error(probe.error ?? "Connection test failed — credentials not saved.");
     }
 
+    const startedAt = new Date().toISOString();
     const { data: inserted, error } = await context.supabase
       .from("websites")
       .insert({
@@ -90,7 +93,7 @@ export const connectWebsite = createServerFn({ method: "POST" })
         wc_consumer_secret: data.wc_consumer_secret ?? null,
         status: "connected",
         connection_status: probe.info.woocommerce ? "connected" : "connected_no_wc",
-        last_checked_at: new Date().toISOString(),
+        last_checked_at: startedAt,
         last_error: null,
         meta: probe.info,
       })
@@ -98,39 +101,69 @@ export const connectWebsite = createServerFn({ method: "POST" })
       .single();
 
     if (error) {
-      // Debug context — never log credentials or secrets
+      // Debug context — never log credentials or secrets. Code + class only.
       console.error("[connectWebsite] insert failed", {
-        userExists: Boolean(context.userId),
         userId: context.userId,
-        attemptedOwnerId: context.userId,
         code: (error as { code?: string }).code,
         message: error.message,
-        details: (error as { details?: string }).details,
         hint: (error as { hint?: string }).hint,
       });
-      throw new Error(error.message);
+      throw new Error(friendlyDbError(error, "Could not save the website. Please try again."));
     }
 
-    // Owner membership row (best-effort; ignore unique-constraint conflicts)
+    // Owner membership row — required for shared-access policies to see this
+    // site even after ownership transfer. Ignore unique-constraint conflict.
+    const memberStartedAt = new Date().toISOString();
     const { error: memberError } = await context.supabase.from("website_members").insert({
       website_id: inserted.id,
       user_id: context.userId,
       permission: "owner",
     });
-    if (memberError && !/duplicate|unique/i.test(memberError.message)) {
-      console.error("[connectWebsite] member insert failed", {
-        websiteId: inserted.id,
-        userId: context.userId,
-        message: memberError.message,
-      });
+    let alreadyExisted = false;
+    if (memberError) {
+      if (/duplicate|unique/i.test(memberError.message)) {
+        alreadyExisted = true;
+      } else {
+        console.error("[connectWebsite] member insert failed", {
+          websiteId: inserted.id,
+          userId: context.userId,
+          code: (memberError as { code?: string }).code,
+          message: memberError.message,
+        });
+        throw new Error(friendlyDbError(memberError, "Saved the website but could not register ownership. Please retry."));
+      }
     }
 
-    await context.supabase.from("audit_logs").insert({
-      user_id: context.userId,
-      website_id: inserted.id,
-      action: "website.connected",
-      details: { url: data.url, woocommerce: probe.info.woocommerce ?? false },
-    });
+    // Audit: website creation + automatic owner membership. Non-sensitive only.
+    await context.supabase.from("audit_logs").insert([
+      {
+        user_id: context.userId,
+        website_id: inserted.id,
+        action: "website.connected",
+        details: {
+          url: inserted.url,
+          name: inserted.name,
+          woocommerce: probe.info.woocommerce ?? false,
+          theme: probe.info.theme ?? null,
+          plugins_count: probe.info.plugins_count ?? null,
+          started_at: startedAt,
+          completed_at: new Date().toISOString(),
+        },
+      },
+      {
+        user_id: context.userId,
+        website_id: inserted.id,
+        action: "website.member_added",
+        details: {
+          member_user_id: context.userId,
+          permission: "owner",
+          auto_created: true,
+          already_existed: alreadyExisted,
+          started_at: memberStartedAt,
+          completed_at: new Date().toISOString(),
+        },
+      },
+    ]);
 
     return { website: inserted, probe };
   });
