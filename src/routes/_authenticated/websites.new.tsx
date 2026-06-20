@@ -41,6 +41,7 @@ function NewWebsite() {
   const [probe, setProbe] = useState<ProbeResult | null>(null);
   const [testing, setTesting] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<{ title: string; detail: string } | null>(null);
 
   const update = (k: keyof Form) => (e: React.ChangeEvent<HTMLInputElement>) =>
     setForm((f) => ({ ...f, [k]: e.target.value }));
@@ -71,12 +72,37 @@ function NewWebsite() {
     }
   };
 
+  /** Map raw server-fn errors to friendly, non-sensitive UI copy. */
+  const explainSaveError = (raw: string): { title: string; detail: string } => {
+    const m = raw.toLowerCase();
+    if (m.includes("unauthorized") || m.includes("session expired") || m.includes("sign in")) {
+      return { title: "Your session expired", detail: "Please sign out and back in, then try again." };
+    }
+    if (m.includes("permission") || m.includes("row-level") || m.includes("rls") || m.includes("forbidden")) {
+      return {
+        title: "Permission denied",
+        detail: "Your account isn't allowed to add this website. If you just signed in, refresh and retry.",
+      };
+    }
+    if (m.includes("already exists") || m.includes("duplicate")) {
+      return { title: "Website already added", detail: "This URL is already connected to your account." };
+    }
+    if (m.includes("connection test failed") || m.includes("wp rest") || m.includes("woocommerce")) {
+      return { title: "Connection test failed", detail: raw };
+    }
+    if (m.includes("network")) {
+      return { title: "Network error", detail: "We couldn't reach the server. Check your connection and retry." };
+    }
+    return { title: "Could not save website", detail: "Something went wrong on our end. Please retry in a moment." };
+  };
+
   const save = async () => {
     if (!probe?.ok) {
       toast.error("Run a successful test before saving");
       return;
     }
     setSaving(true);
+    setSaveError(null);
     try {
       const res = await connect({
         data: {
@@ -94,7 +120,10 @@ function NewWebsite() {
       toast.success("Website connected");
       navigate({ to: "/websites/$id", params: { id: res.website.id } });
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to save");
+      const raw = e instanceof Error ? e.message : "Failed to save";
+      const mapped = explainSaveError(raw);
+      setSaveError(mapped);
+      toast.error(mapped.title);
     } finally {
       setSaving(false);
     }
@@ -204,6 +233,15 @@ function NewWebsite() {
             ) : (
               <p className="text-xs text-muted-foreground">No test run yet.</p>
             )}
+
+            {saveError ? (
+              <div role="alert" className="rounded-md border border-destructive/30 bg-destructive/5 p-4 text-sm">
+                <div className="flex items-center gap-2 font-medium text-destructive">
+                  <AlertCircle className="h-4 w-4" /> {saveError.title}
+                </div>
+                <p className="mt-1 text-destructive/90">{saveError.detail}</p>
+              </div>
+            ) : null}
           </CardContent>
         </Card>
       )}
