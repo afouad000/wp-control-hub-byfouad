@@ -164,7 +164,7 @@ function Row({ label, value }: { label: string; value: React.ReactNode }) {
   );
 }
 
-function ReconnectButton({ site }: { site: { id: string; url: string; wp_username: string | null } }) {
+function ReconnectButton({ site }: { site: { id: string; url: string } }) {
   const reconnect = useServerFn(reconnectWebsite);
   const qc = useQueryClient();
   const [open, setOpen] = useState(false);
