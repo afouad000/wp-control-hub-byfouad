@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
-import { useState, useMemo } from "react";
+import { useState, useEffect } from "react";
 import { Loader2, RefreshCw } from "lucide-react";
 import { PageHeader, EmptyState } from "@/components/page-header";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { PaginationBar } from "@/components/pagination-bar";
 import { listWebsites, fetchOrders, updateOrderStatus } from "@/lib/websites.functions";
 import { toast } from "sonner";
 
@@ -54,27 +55,29 @@ function OrdersTable({ websiteId }: { websiteId: string }) {
   const update = useServerFn(updateOrderStatus);
   const qc = useQueryClient();
   const [q, setQ] = useState("");
+  const [search, setSearch] = useState("");
   const [status, setStatus] = useState<string>("all");
+  const [page, setPage] = useState(1);
+  const [perPage, setPerPage] = useState(20);
   const [updatingId, setUpdatingId] = useState<number | null>(null);
 
+  useEffect(() => {
+    const t = setTimeout(() => { setSearch(q); setPage(1); }, 300);
+    return () => clearTimeout(t);
+  }, [q]);
+  useEffect(() => { setPage(1); }, [status, perPage, websiteId]);
+
   const { data, isLoading, refetch, isFetching } = useQuery({
-    queryKey: ["orders", websiteId],
-    queryFn: () => fn({ data: { website_id: websiteId } }),
+    queryKey: ["orders", websiteId, page, perPage, search, status],
+    queryFn: () => fn({ data: {
+      website_id: websiteId, page, per_page: perPage,
+      search: search || undefined,
+      status: status === "all" ? undefined : status,
+    } }),
   });
 
-  const filtered = useMemo(() => {
-    if (!data?.ok) return [];
-    const term = q.trim().toLowerCase();
-    return data.orders.filter((o) => {
-      if (status !== "all" && o.status !== status) return false;
-      if (!term) return true;
-      return (
-        o.number.toLowerCase().includes(term) ||
-        `${o.billing.first_name} ${o.billing.last_name}`.toLowerCase().includes(term) ||
-        o.billing.email?.toLowerCase().includes(term)
-      );
-    });
-  }, [data, q, status]);
+  const orders = data?.ok ? data.orders : [];
+  const paging = data?.paging ?? { total: 0, totalPages: 0, page, perPage };
 
   const changeStatus = async (orderId: number, newStatus: string) => {
     setUpdatingId(orderId);
@@ -112,7 +115,7 @@ function OrdersTable({ websiteId }: { websiteId: string }) {
           <div className="h-24 animate-pulse rounded bg-muted" />
         ) : !data?.ok ? (
           <p className="text-sm text-destructive">{data?.error ?? "Failed to load"}</p>
-        ) : filtered.length === 0 ? (
+        ) : orders.length === 0 ? (
           <EmptyState title="No matching orders" />
         ) : (
           <Table>
@@ -126,7 +129,7 @@ function OrdersTable({ websiteId }: { websiteId: string }) {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {filtered.map((o) => (
+              {orders.map((o) => (
                 <TableRow key={o.id}>
                   <TableCell className="font-mono text-xs">#{o.number}</TableCell>
                   <TableCell>
@@ -153,6 +156,15 @@ function OrdersTable({ websiteId }: { websiteId: string }) {
             </TableBody>
           </Table>
         )}
+        <PaginationBar
+          page={paging.page}
+          totalPages={paging.totalPages}
+          total={paging.total}
+          perPage={paging.perPage}
+          onPageChange={setPage}
+          onPerPageChange={setPerPage}
+          disabled={isFetching}
+        />
       </CardContent>
     </Card>
   );

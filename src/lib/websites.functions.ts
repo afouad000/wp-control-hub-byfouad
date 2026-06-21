@@ -4,7 +4,7 @@ import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { assertAuthenticatedContext, friendlyDbError } from "./server-guards";
 
 const PUBLIC_COLUMNS =
-  "id, owner_id, name, url, client_name, logo_url, status, connection_status, last_checked_at, last_error, meta, created_at, updated_at, wp_username";
+  "id, owner_id, name, url, client_name, logo_url, status, connection_status, last_checked_at, last_error, meta, created_at, updated_at";
 
 const ConnectInput = z.object({
   name: z.string().trim().min(1).max(120),
@@ -27,7 +27,12 @@ const TestInput = z.object({
 
 const ReconnectInput = TestInput.extend({ id: z.string().uuid() });
 
-const UpdateInput = ConnectInput.partial().extend({ id: z.string().uuid() });
+const UpdateInput = z.object({
+  id: z.string().uuid(),
+  name: z.string().trim().min(1).max(120).optional(),
+  client_name: z.string().trim().max(120).optional().nullable(),
+  logo_url: z.string().trim().url().max(2048).optional().nullable(),
+});
 
 const IdInput = z.object({ id: z.string().uuid() });
 
@@ -55,7 +60,6 @@ export const getWebsite = createServerFn({ method: "GET" })
     return row;
   });
 
-/** Probe credentials without saving anything — powers the wizard's Test step. */
 export const testConnection = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d) => TestInput.parse(d))
@@ -67,10 +71,6 @@ export const connectWebsite = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d) => ConnectInput.parse(d))
   .handler(async ({ data, context }) => {
-    // Defensive: middleware already enforces this, but we re-assert so the
-    // invariant `owner_id = auth.uid()` is impossible to bypass and so any
-    // future refactor that drops the middleware fails loudly instead of
-    // silently widening RLS. Also rejects service-role tokens.
     assertAuthenticatedContext(context);
 
     const probe = await probeSite(data.url, data.wp_username, data.wp_app_password, data.wc_consumer_key, data.wc_consumer_secret);
@@ -82,7 +82,7 @@ export const connectWebsite = createServerFn({ method: "POST" })
     const { data: inserted, error } = await context.supabase
       .from("websites")
       .insert({
-        owner_id: context.userId, // server-set; never trust the client
+        owner_id: context.userId,
         name: data.name,
         url: data.url.replace(/\/$/, ""),
         client_name: data.client_name ?? null,
@@ -101,7 +101,6 @@ export const connectWebsite = createServerFn({ method: "POST" })
       .single();
 
     if (error) {
-      // Debug context — never log credentials or secrets. Code + class only.
       console.error("[connectWebsite] insert failed", {
         userId: context.userId,
         code: (error as { code?: string }).code,
@@ -111,8 +110,6 @@ export const connectWebsite = createServerFn({ method: "POST" })
       throw new Error(friendlyDbError(error, "Could not save the website. Please try again."));
     }
 
-    // Owner membership row — required for shared-access policies to see this
-    // site even after ownership transfer. Ignore unique-constraint conflict.
     const memberStartedAt = new Date().toISOString();
     const { error: memberError } = await context.supabase.from("website_members").insert({
       website_id: inserted.id,
@@ -134,7 +131,6 @@ export const connectWebsite = createServerFn({ method: "POST" })
       }
     }
 
-    // Audit: website creation + automatic owner membership. Non-sensitive only.
     await context.supabase.from("audit_logs").insert([
       {
         user_id: context.userId,
@@ -168,14 +164,12 @@ export const connectWebsite = createServerFn({ method: "POST" })
     return { website: inserted, probe };
   });
 
-/** Update credentials for an existing site; re-tests before saving. */
 export const reconnectWebsite = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d) => ReconnectInput.parse(d))
   .handler(async ({ data, context }) => {
     const probe = await probeSite(data.url, data.wp_username, data.wp_app_password, data.wc_consumer_key, data.wc_consumer_secret);
     if (!probe.ok) {
-      // Mark error but don't overwrite stored creds
       await context.supabase
         .from("websites")
         .update({
@@ -248,19 +242,8 @@ export const refreshWebsite = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d) => IdInput.parse(d))
   .handler(async ({ data, context }) => {
-    const { data: site, error } = await context.supabase
-      .from("websites")
-      .select("id, url, wp_username, wp_app_password, wc_consumer_key, wc_consumer_secret")
-      .eq("id", data.id)
-      .maybeSingle();
-    if (error || !site) throw new Error(error?.message ?? "Site not found");
-    const probe = await probeSite(
-      site.url,
-      site.wp_username ?? "",
-      site.wp_app_password ?? "",
-      site.wc_consumer_key,
-      site.wc_consumer_secret,
-    );
+    const c = await getCreds(context, data.id);
+    const probe = await probeSite(c.url, c.wp_username ?? "", c.wp_app_password ?? "", c.wc_consumer_key, c.wc_consumer_secret);
     await context.supabase
       .from("websites")
       .update({
@@ -372,7 +355,11 @@ async function probeSite(
   }
 }
 
-// ---------- Live content APIs (all server-side; creds never leave the server) ----------
+// ---------- Live content APIs ----------
+// Credentials are read with the admin client AFTER verifying the user has
+// access to the website via the user-scoped client (RLS enforced). Column
+// SELECT on the credential columns is revoked from `authenticated`, so the
+// admin path is the only way to retrieve them server-side.
 
 const SiteScoped = z.object({ website_id: z.string().uuid() });
 
@@ -385,18 +372,37 @@ type Creds = {
 };
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function getCreds(context: any, id: string): Promise<Creds> {
-  const { data, error } = await context.supabase
+async function getCreds(context: any, websiteId: string): Promise<Creds> {
+  // 1) Verify access via user-scoped client (RLS).
+  const { data: site, error } = await context.supabase
+    .from("websites")
+    .select("id")
+    .eq("id", websiteId)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  if (!site) throw new Error("Website not found or access denied.");
+
+  // 2) Read raw credentials via service-role client.
+  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+  const { data: row, error: e2 } = await supabaseAdmin
     .from("websites")
     .select("url, wp_username, wp_app_password, wc_consumer_key, wc_consumer_secret")
-    .eq("id", id)
-    .maybeSingle();
-  if (error || !data) throw new Error(error?.message ?? "Not found");
-  return data as Creds;
+    .eq("id", websiteId)
+    .single();
+  if (e2 || !row) throw new Error(e2?.message ?? "Credentials unavailable.");
+  return row as Creds;
 }
 
+const wpAuthHeader = (c: Creds) =>
+  "Basic " + btoa(`${c.wp_username ?? ""}:${c.wp_app_password ?? ""}`);
 const wcAuthHeader = (c: Creds) =>
-  "Basic " + btoa(`${c.wc_consumer_key}:${c.wc_consumer_secret}`);
+  "Basic " + btoa(`${c.wc_consumer_key ?? ""}:${c.wc_consumer_secret ?? ""}`);
+
+function parsePaging(res: Response, perPage: number, page: number) {
+  const total = parseInt(res.headers.get("x-wp-total") ?? "0", 10) || 0;
+  const totalPages = parseInt(res.headers.get("x-wp-totalpages") ?? "0", 10) || 0;
+  return { total, totalPages, page, perPage };
+}
 
 export const fetchPosts = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
@@ -405,7 +411,7 @@ export const fetchPosts = createServerFn({ method: "GET" })
     const c = await getCreds(context, data.website_id);
     try {
       const res = await fetch(`${c.url.replace(/\/$/, "")}/wp-json/wp/v2/posts?per_page=20&_embed`, {
-        headers: { Authorization: "Basic " + btoa(`${c.wp_username}:${c.wp_app_password}`) },
+        headers: { Authorization: wpAuthHeader(c) },
       });
       if (!res.ok) return { ok: false as const, error: `HTTP ${res.status}`, posts: [] };
       return { ok: true as const, posts: (await res.json()) as Array<{ id: number; title: { rendered: string }; status: string; date: string; link: string }> };
@@ -414,50 +420,245 @@ export const fetchPosts = createServerFn({ method: "GET" })
     }
   });
 
+// ---------------- Products ----------------
+
+const ProductsInput = z.object({
+  website_id: z.string().uuid(),
+  page: z.number().int().positive().default(1),
+  per_page: z.number().int().min(1).max(100).default(20),
+  search: z.string().trim().max(200).optional(),
+  stock_status: z.enum(["instock", "outofstock", "onbackorder"]).optional(),
+  status: z.enum(["any", "publish", "draft", "pending", "private"]).optional(),
+});
+
+type WCProduct = {
+  id: number; name: string; type: string; status: string;
+  price: string; regular_price: string; sale_price: string;
+  stock_status: string; stock_quantity: number | null; sku: string;
+  images: Array<{ id?: number; src: string }>;
+  short_description?: string; description?: string;
+  categories?: Array<{ id: number; name: string }>;
+  tags?: Array<{ id: number; name: string }>;
+  variations?: number[];
+};
+
 export const fetchProducts = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((d) => SiteScoped.parse(d))
+  .inputValidator((d) => ProductsInput.parse(d))
   .handler(async ({ data, context }) => {
     const c = await getCreds(context, data.website_id);
-    if (!c.wc_consumer_key || !c.wc_consumer_secret) return { ok: false as const, error: "WooCommerce keys missing", products: [] };
+    if (!c.wc_consumer_key || !c.wc_consumer_secret) {
+      return { ok: false as const, error: "WooCommerce keys missing", products: [] as WCProduct[], paging: { total: 0, totalPages: 0, page: 1, perPage: data.per_page } };
+    }
     try {
-      const res = await fetch(`${c.url.replace(/\/$/, "")}/wp-json/wc/v3/products?per_page=50`, {
+      const params = new URLSearchParams({
+        page: String(data.page),
+        per_page: String(data.per_page),
+      });
+      if (data.search) params.set("search", data.search);
+      if (data.stock_status) params.set("stock_status", data.stock_status);
+      if (data.status && data.status !== "any") params.set("status", data.status);
+
+      const res = await fetch(`${c.url.replace(/\/$/, "")}/wp-json/wc/v3/products?${params}`, {
         headers: { Authorization: wcAuthHeader(c) },
       });
-      if (!res.ok) return { ok: false as const, error: `HTTP ${res.status}`, products: [] };
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        return { ok: false as const, error: `HTTP ${res.status} ${text.slice(0, 160)}`, products: [] as WCProduct[], paging: { total: 0, totalPages: 0, page: data.page, perPage: data.per_page } };
+      }
       return {
         ok: true as const,
-        products: (await res.json()) as Array<{
-          id: number; name: string; price: string; regular_price: string; sale_price: string;
-          stock_status: string; stock_quantity: number | null; sku: string; status: string;
-          images: Array<{ src: string }>;
-        }>,
+        products: (await res.json()) as WCProduct[],
+        paging: parsePaging(res, data.per_page, data.page),
       };
     } catch (e) {
-      return { ok: false as const, error: e instanceof Error ? e.message : "Network error", products: [] };
+      return { ok: false as const, error: e instanceof Error ? e.message : "Network error", products: [] as WCProduct[], paging: { total: 0, totalPages: 0, page: data.page, perPage: data.per_page } };
     }
   });
 
-export const fetchOrders = createServerFn({ method: "GET" })
+const UpdateProductInput = z.object({
+  website_id: z.string().uuid(),
+  product_id: z.number().int().positive(),
+  regular_price: z.string().optional(),
+  sale_price: z.string().optional(),
+  stock_quantity: z.number().int().optional().nullable(),
+  stock_status: z.enum(["instock", "outofstock", "onbackorder"]).optional(),
+  sku: z.string().optional(),
+});
+
+export const updateProduct = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((d) => SiteScoped.parse(d))
+  .inputValidator((d) => UpdateProductInput.parse(d))
   .handler(async ({ data, context }) => {
     const c = await getCreds(context, data.website_id);
-    if (!c.wc_consumer_key || !c.wc_consumer_secret) return { ok: false as const, error: "WooCommerce keys missing", orders: [] };
+    if (!c.wc_consumer_key || !c.wc_consumer_secret) throw new Error("WooCommerce keys missing");
+    const { website_id, product_id, ...patch } = data;
+    const body: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(patch)) if (v !== undefined) body[k] = v;
+    if (body.stock_quantity !== undefined && body.stock_quantity !== null) {
+      body.manage_stock = true;
+    }
+    const res = await fetch(`${c.url.replace(/\/$/, "")}/wp-json/wc/v3/products/${product_id}`, {
+      method: "PUT",
+      headers: { Authorization: wcAuthHeader(c), "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new Error(`Failed to update product: HTTP ${res.status} ${text.slice(0, 200)}`);
+    }
+    await context.supabase.from("audit_logs").insert({
+      user_id: context.userId,
+      website_id,
+      action: "product.updated",
+      details: { product_id, fields: Object.keys(body) },
+    });
+    return { ok: true };
+  });
+
+// ---------- Variable products ----------
+
+const VariationsInput = z.object({
+  website_id: z.string().uuid(),
+  product_id: z.number().int().positive(),
+  page: z.number().int().positive().default(1),
+  per_page: z.number().int().min(1).max(100).default(50),
+});
+
+type WCVariation = {
+  id: number;
+  sku: string;
+  price: string;
+  regular_price: string;
+  sale_price: string;
+  stock_status: string;
+  stock_quantity: number | null;
+  attributes: Array<{ id: number; name: string; option: string }>;
+  image?: { src: string } | null;
+};
+
+export const fetchVariations = createServerFn({ method: "GET" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d) => VariationsInput.parse(d))
+  .handler(async ({ data, context }) => {
+    const c = await getCreds(context, data.website_id);
+    if (!c.wc_consumer_key || !c.wc_consumer_secret) {
+      return { ok: false as const, error: "WooCommerce keys missing", variations: [] as WCVariation[], paging: { total: 0, totalPages: 0, page: 1, perPage: data.per_page } };
+    }
     try {
-      const res = await fetch(`${c.url.replace(/\/$/, "")}/wp-json/wc/v3/orders?per_page=50`, {
-        headers: { Authorization: wcAuthHeader(c) },
-      });
-      if (!res.ok) return { ok: false as const, error: `HTTP ${res.status}`, orders: [] };
+      const params = new URLSearchParams({ page: String(data.page), per_page: String(data.per_page) });
+      const res = await fetch(
+        `${c.url.replace(/\/$/, "")}/wp-json/wc/v3/products/${data.product_id}/variations?${params}`,
+        { headers: { Authorization: wcAuthHeader(c) } },
+      );
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        return { ok: false as const, error: `HTTP ${res.status} ${text.slice(0, 160)}`, variations: [] as WCVariation[], paging: { total: 0, totalPages: 0, page: data.page, perPage: data.per_page } };
+      }
       return {
         ok: true as const,
-        orders: (await res.json()) as Array<{
-          id: number; number: string; status: string; total: string; currency: string;
-          date_created: string; billing: { first_name: string; last_name: string; email: string };
-        }>,
+        variations: (await res.json()) as WCVariation[],
+        paging: parsePaging(res, data.per_page, data.page),
       };
     } catch (e) {
-      return { ok: false as const, error: e instanceof Error ? e.message : "Network error", orders: [] };
+      return { ok: false as const, error: e instanceof Error ? e.message : "Network error", variations: [] as WCVariation[], paging: { total: 0, totalPages: 0, page: data.page, perPage: data.per_page } };
+    }
+  });
+
+const UpdateVariationInput = z.object({
+  website_id: z.string().uuid(),
+  product_id: z.number().int().positive(),
+  variation_id: z.number().int().positive(),
+  regular_price: z.string().optional(),
+  sale_price: z.string().optional(),
+  stock_quantity: z.number().int().optional().nullable(),
+  stock_status: z.enum(["instock", "outofstock", "onbackorder"]).optional(),
+  sku: z.string().optional(),
+});
+
+export const updateVariation = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d) => UpdateVariationInput.parse(d))
+  .handler(async ({ data, context }) => {
+    const c = await getCreds(context, data.website_id);
+    if (!c.wc_consumer_key || !c.wc_consumer_secret) throw new Error("WooCommerce keys missing");
+    const { website_id, product_id, variation_id, ...patch } = data;
+    const body: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(patch)) if (v !== undefined) body[k] = v;
+    if (body.stock_quantity !== undefined && body.stock_quantity !== null) {
+      body.manage_stock = true;
+    }
+    const res = await fetch(
+      `${c.url.replace(/\/$/, "")}/wp-json/wc/v3/products/${product_id}/variations/${variation_id}`,
+      {
+        method: "PUT",
+        headers: { Authorization: wcAuthHeader(c), "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      },
+    );
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new Error(`Failed to update variation: HTTP ${res.status} ${text.slice(0, 200)}`);
+    }
+    await context.supabase.from("audit_logs").insert({
+      user_id: context.userId,
+      website_id,
+      action: "product.variation_updated",
+      details: { product_id, variation_id, fields: Object.keys(body) },
+    });
+    return { ok: true };
+  });
+
+// ---------------- Orders ----------------
+
+const OrdersInput = z.object({
+  website_id: z.string().uuid(),
+  page: z.number().int().positive().default(1),
+  per_page: z.number().int().min(1).max(100).default(20),
+  search: z.string().trim().max(200).optional(),
+  status: z.string().trim().max(40).optional(),
+  after: z.string().datetime().optional(),
+  before: z.string().datetime().optional(),
+});
+
+type WCOrder = {
+  id: number; number: string; status: string; total: string; currency: string;
+  date_created: string;
+  billing: { first_name: string; last_name: string; email: string; phone?: string };
+};
+
+export const fetchOrders = createServerFn({ method: "GET" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d) => OrdersInput.parse(d))
+  .handler(async ({ data, context }) => {
+    const c = await getCreds(context, data.website_id);
+    if (!c.wc_consumer_key || !c.wc_consumer_secret) {
+      return { ok: false as const, error: "WooCommerce keys missing", orders: [] as WCOrder[], paging: { total: 0, totalPages: 0, page: 1, perPage: data.per_page } };
+    }
+    try {
+      const params = new URLSearchParams({
+        page: String(data.page),
+        per_page: String(data.per_page),
+      });
+      if (data.search) params.set("search", data.search);
+      if (data.status && data.status !== "all") params.set("status", data.status);
+      if (data.after) params.set("after", data.after);
+      if (data.before) params.set("before", data.before);
+
+      const res = await fetch(`${c.url.replace(/\/$/, "")}/wp-json/wc/v3/orders?${params}`, {
+        headers: { Authorization: wcAuthHeader(c) },
+      });
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        return { ok: false as const, error: `HTTP ${res.status} ${text.slice(0, 160)}`, orders: [] as WCOrder[], paging: { total: 0, totalPages: 0, page: data.page, perPage: data.per_page } };
+      }
+      return {
+        ok: true as const,
+        orders: (await res.json()) as WCOrder[],
+        paging: parsePaging(res, data.per_page, data.page),
+      };
+    } catch (e) {
+      return { ok: false as const, error: e instanceof Error ? e.message : "Network error", orders: [] as WCOrder[], paging: { total: 0, totalPages: 0, page: data.page, perPage: data.per_page } };
     }
   });
 
@@ -488,66 +689,48 @@ export const updateOrderStatus = createServerFn({ method: "POST" })
     return { ok: true };
   });
 
-const UpdateProductInput = z.object({
+// ---------------- Customers ----------------
+
+const CustomersInput = z.object({
   website_id: z.string().uuid(),
-  product_id: z.number().int().positive(),
-  regular_price: z.string().optional(),
-  sale_price: z.string().optional(),
-  stock_quantity: z.number().int().optional().nullable(),
-  stock_status: z.enum(["instock", "outofstock", "onbackorder"]).optional(),
-  sku: z.string().optional(),
+  page: z.number().int().positive().default(1),
+  per_page: z.number().int().min(1).max(100).default(20),
+  search: z.string().trim().max(200).optional(),
 });
 
-export const updateProduct = createServerFn({ method: "POST" })
-  .middleware([requireSupabaseAuth])
-  .inputValidator((d) => UpdateProductInput.parse(d))
-  .handler(async ({ data, context }) => {
-    const c = await getCreds(context, data.website_id);
-    if (!c.wc_consumer_key || !c.wc_consumer_secret) throw new Error("WooCommerce keys missing");
-    const { website_id, product_id, ...patch } = data;
-    // strip undefined
-    const body: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(patch)) if (v !== undefined) body[k] = v;
-    if (body.stock_quantity !== undefined && body.stock_quantity !== null) {
-      body.manage_stock = true;
-    }
-    const res = await fetch(`${c.url.replace(/\/$/, "")}/wp-json/wc/v3/products/${product_id}`, {
-      method: "PUT",
-      headers: { Authorization: wcAuthHeader(c), "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      throw new Error(`Failed to update product: HTTP ${res.status} ${text.slice(0, 200)}`);
-    }
-    await context.supabase.from("audit_logs").insert({
-      user_id: context.userId,
-      website_id,
-      action: "product.updated",
-      details: { product_id, fields: Object.keys(body) },
-    });
-    return { ok: true };
-  });
+type WCCustomer = {
+  id: number; email: string; first_name: string; last_name: string;
+  username: string; orders_count?: number; total_spent?: string; date_created: string;
+  billing?: { address_1?: string; city?: string; country?: string; phone?: string };
+};
 
 export const fetchCustomers = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((d) => SiteScoped.parse(d))
+  .inputValidator((d) => CustomersInput.parse(d))
   .handler(async ({ data, context }) => {
     const c = await getCreds(context, data.website_id);
-    if (!c.wc_consumer_key || !c.wc_consumer_secret) return { ok: false as const, error: "WooCommerce keys missing", customers: [] };
+    if (!c.wc_consumer_key || !c.wc_consumer_secret) {
+      return { ok: false as const, error: "WooCommerce keys missing", customers: [] as WCCustomer[], paging: { total: 0, totalPages: 0, page: 1, perPage: data.per_page } };
+    }
     try {
-      const res = await fetch(`${c.url.replace(/\/$/, "")}/wp-json/wc/v3/customers?per_page=50`, {
+      const params = new URLSearchParams({
+        page: String(data.page),
+        per_page: String(data.per_page),
+      });
+      if (data.search) params.set("search", data.search);
+      const res = await fetch(`${c.url.replace(/\/$/, "")}/wp-json/wc/v3/customers?${params}`, {
         headers: { Authorization: wcAuthHeader(c) },
       });
-      if (!res.ok) return { ok: false as const, error: `HTTP ${res.status}`, customers: [] };
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        return { ok: false as const, error: `HTTP ${res.status} ${text.slice(0, 160)}`, customers: [] as WCCustomer[], paging: { total: 0, totalPages: 0, page: data.page, perPage: data.per_page } };
+      }
       return {
         ok: true as const,
-        customers: (await res.json()) as Array<{
-          id: number; email: string; first_name: string; last_name: string;
-          username: string; orders_count?: number; total_spent?: string; date_created: string;
-        }>,
+        customers: (await res.json()) as WCCustomer[],
+        paging: parsePaging(res, data.per_page, data.page),
       };
     } catch (e) {
-      return { ok: false as const, error: e instanceof Error ? e.message : "Network error", customers: [] };
+      return { ok: false as const, error: e instanceof Error ? e.message : "Network error", customers: [] as WCCustomer[], paging: { total: 0, totalPages: 0, page: data.page, perPage: data.per_page } };
     }
   });

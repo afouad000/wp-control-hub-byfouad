@@ -164,13 +164,13 @@ function Row({ label, value }: { label: string; value: React.ReactNode }) {
   );
 }
 
-function ReconnectButton({ site }: { site: { id: string; url: string; wp_username: string | null } }) {
+function ReconnectButton({ site }: { site: { id: string; url: string } }) {
   const reconnect = useServerFn(reconnectWebsite);
   const qc = useQueryClient();
   const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [url, setUrl] = useState(site.url);
-  const [user, setUser] = useState(site.wp_username ?? "");
+  const [user, setUser] = useState("");
   const [pass, setPass] = useState("");
   const [ck, setCk] = useState("");
   const [cs, setCs] = useState("");
