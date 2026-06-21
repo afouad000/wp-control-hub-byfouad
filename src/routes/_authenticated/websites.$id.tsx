@@ -170,7 +170,7 @@ function ReconnectButton({ site }: { site: { id: string; url: string } }) {
   const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [url, setUrl] = useState(site.url);
-  const [user, setUser] = useState(site.wp_username ?? "");
+  const [user, setUser] = useState("");
   const [pass, setPass] = useState("");
   const [ck, setCk] = useState("");
   const [cs, setCs] = useState("");
