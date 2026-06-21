@@ -1,7 +1,7 @@
 import { Link, useRouterState } from "@tanstack/react-router";
 import {
   LayoutDashboard, Globe, Plus, Users, Activity, Settings,
-  ShoppingBag, ShoppingCart, Package,
+  ShoppingBag, ShoppingCart, Package, UserRound,
 } from "lucide-react";
 import {
   Sidebar, SidebarContent, SidebarFooter, SidebarGroup, SidebarGroupContent,
@@ -17,6 +17,7 @@ const manage = [
   { title: "Add website", url: "/websites/new", icon: Plus },
   { title: "Orders", url: "/orders", icon: ShoppingCart },
   { title: "Products", url: "/products", icon: Package },
+  { title: "Customers", url: "/customers", icon: UserRound },
 ];
 const account = [
   { title: "Users & roles", url: "/users", icon: Users },
