@@ -2,18 +2,22 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { useState, useEffect } from "react";
-import { Loader2, RefreshCw, Pencil, AlertTriangle, Layers } from "lucide-react";
+import { Loader2, RefreshCw, Pencil, AlertTriangle, Layers, Plus, Trash2 } from "lucide-react";
 import { PageHeader, EmptyState } from "@/components/page-header";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { PaginationBar } from "@/components/pagination-bar";
-import { listWebsites, fetchProducts, updateProduct, fetchVariations, updateVariation } from "@/lib/websites.functions";
+import {
+  listWebsites, fetchProducts, updateProduct, fetchVariations, updateVariation,
+  createProduct, deleteProduct,
+} from "@/lib/websites.functions";
 import { toast } from "sonner";
 
 export const Route = createFileRoute("/_authenticated/products")({
@@ -72,6 +76,9 @@ function ProductsTable({ websiteId }: { websiteId: string }) {
   const [perPage, setPerPage] = useState(20);
   const [editing, setEditing] = useState<Product | null>(null);
   const [variationsFor, setVariationsFor] = useState<Product | null>(null);
+  const [creating, setCreating] = useState(false);
+  const del = useServerFn(deleteProduct);
+  const qc = useQueryClient();
 
   // Debounce search input, reset to page 1 on changes.
   useEffect(() => {
@@ -111,6 +118,7 @@ function ProductsTable({ websiteId }: { websiteId: string }) {
             <Button size="sm" variant="outline" onClick={() => refetch()} disabled={isFetching}>
               <RefreshCw className={`mr-1 h-3 w-3 ${isFetching ? "animate-spin" : ""}`} /> Refresh
             </Button>
+            <Button size="sm" onClick={() => setCreating(true)}><Plus className="mr-1 h-3 w-3" /> New product</Button>
           </div>
         </CardHeader>
         <CardContent>
@@ -161,15 +169,25 @@ function ProductsTable({ websiteId }: { websiteId: string }) {
                         </div>
                       </TableCell>
                       <TableCell>
-                        {isVariable ? (
-                          <Button size="sm" variant="ghost" onClick={() => setVariationsFor(p)}>
-                            <Layers className="mr-1 h-3 w-3" /> Variations
-                          </Button>
-                        ) : (
-                          <Button size="sm" variant="ghost" onClick={() => setEditing(p)}>
-                            <Pencil className="h-3 w-3" />
-                          </Button>
-                        )}
+                        <div className="flex items-center gap-1">
+                          {isVariable ? (
+                            <Button size="sm" variant="ghost" onClick={() => setVariationsFor(p)}>
+                              <Layers className="mr-1 h-3 w-3" /> Variations
+                            </Button>
+                          ) : (
+                            <Button size="sm" variant="ghost" onClick={() => setEditing(p)}>
+                              <Pencil className="h-3 w-3" />
+                            </Button>
+                          )}
+                          <Button size="sm" variant="ghost" className="text-destructive" onClick={async () => {
+                            if (!confirm(`Delete "${p.name}"? (moves to trash)`)) return;
+                            try {
+                              await del({ data: { website_id: websiteId, product_id: p.id, force: false } });
+                              toast.success("Deleted");
+                              qc.invalidateQueries({ queryKey: ["products", websiteId] });
+                            } catch (e) { toast.error(e instanceof Error ? e.message : "Delete failed"); }
+                          }}><Trash2 className="h-3 w-3" /></Button>
+                        </div>
                       </TableCell>
                     </TableRow>
                   );
@@ -191,7 +209,103 @@ function ProductsTable({ websiteId }: { websiteId: string }) {
 
       <EditProductDialog websiteId={websiteId} product={editing} onClose={() => setEditing(null)} />
       <VariationsDialog websiteId={websiteId} product={variationsFor} onClose={() => setVariationsFor(null)} />
+      <CreateProductDialog websiteId={websiteId} open={creating} onClose={() => setCreating(false)} />
     </>
+  );
+}
+
+function CreateProductDialog({ websiteId, open, onClose }: { websiteId: string; open: boolean; onClose: () => void }) {
+  const create = useServerFn(createProduct);
+  const qc = useQueryClient();
+  const [saving, setSaving] = useState(false);
+  const [name, setName] = useState("");
+  const [type, setType] = useState<"simple" | "variable" | "grouped" | "external">("simple");
+  const [regular, setRegular] = useState("");
+  const [sale, setSale] = useState("");
+  const [sku, setSku] = useState("");
+  const [stock, setStock] = useState("");
+  const [stockStatus, setStockStatus] = useState<"instock" | "outofstock" | "onbackorder">("instock");
+  const [status, setStatus] = useState<"publish" | "draft" | "pending" | "private">("draft");
+  const [shortDesc, setShortDesc] = useState("");
+  const [desc, setDesc] = useState("");
+
+  const submit = async () => {
+    setSaving(true);
+    try {
+      await create({
+        data: {
+          website_id: websiteId, name, type,
+          regular_price: regular || undefined, sale_price: sale || undefined,
+          sku: sku || undefined, status,
+          stock_quantity: stock ? Number(stock) : null,
+          stock_status: stockStatus,
+          short_description: shortDesc || undefined, description: desc || undefined,
+        },
+      });
+      toast.success("Product created");
+      qc.invalidateQueries({ queryKey: ["products", websiteId] });
+      onClose();
+      setName(""); setRegular(""); setSale(""); setSku(""); setStock(""); setShortDesc(""); setDesc("");
+    } catch (e) { toast.error(e instanceof Error ? e.message : "Create failed"); }
+    finally { setSaving(false); }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-w-2xl">
+        <DialogHeader><DialogTitle>New product</DialogTitle></DialogHeader>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div className="space-y-1.5 sm:col-span-2"><Label>Name</Label><Input value={name} onChange={(e) => setName(e.target.value)} /></div>
+          <div className="space-y-1.5">
+            <Label>Type</Label>
+            <Select value={type} onValueChange={(v) => setType(v as typeof type)}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="simple">Simple</SelectItem>
+                <SelectItem value="variable">Variable</SelectItem>
+                <SelectItem value="grouped">Grouped</SelectItem>
+                <SelectItem value="external">External</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1.5">
+            <Label>Status</Label>
+            <Select value={status} onValueChange={(v) => setStatus(v as typeof status)}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="draft">Draft</SelectItem>
+                <SelectItem value="publish">Published</SelectItem>
+                <SelectItem value="pending">Pending</SelectItem>
+                <SelectItem value="private">Private</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1.5"><Label>Regular price</Label><Input value={regular} onChange={(e) => setRegular(e.target.value)} /></div>
+          <div className="space-y-1.5"><Label>Sale price</Label><Input value={sale} onChange={(e) => setSale(e.target.value)} /></div>
+          <div className="space-y-1.5"><Label>SKU</Label><Input value={sku} onChange={(e) => setSku(e.target.value)} /></div>
+          <div className="space-y-1.5"><Label>Stock qty</Label><Input type="number" value={stock} onChange={(e) => setStock(e.target.value)} /></div>
+          <div className="space-y-1.5 sm:col-span-2">
+            <Label>Stock status</Label>
+            <Select value={stockStatus} onValueChange={(v) => setStockStatus(v as typeof stockStatus)}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="instock">In stock</SelectItem>
+                <SelectItem value="outofstock">Out of stock</SelectItem>
+                <SelectItem value="onbackorder">On backorder</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1.5 sm:col-span-2"><Label>Short description</Label><Textarea rows={2} value={shortDesc} onChange={(e) => setShortDesc(e.target.value)} /></div>
+          <div className="space-y-1.5 sm:col-span-2"><Label>Description</Label><Textarea rows={4} value={desc} onChange={(e) => setDesc(e.target.value)} /></div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button onClick={submit} disabled={saving || !name}>
+            {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null} Create
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
