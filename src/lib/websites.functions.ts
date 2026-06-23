@@ -734,3 +734,360 @@ export const fetchCustomers = createServerFn({ method: "GET" })
       return { ok: false as const, error: e instanceof Error ? e.message : "Network error", customers: [] as WCCustomer[], paging: { total: 0, totalPages: 0, page: data.page, perPage: data.per_page } };
     }
   });
+
+// ---------------- Order detail / notes / refund ----------------
+
+const OrderIdInput = z.object({ website_id: z.string().uuid(), order_id: z.number().int().positive() });
+
+export const fetchOrder = createServerFn({ method: "GET" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d) => OrderIdInput.parse(d))
+  .handler(async ({ data, context }) => {
+    const c = await getCreds(context, data.website_id);
+    if (!c.wc_consumer_key || !c.wc_consumer_secret) return { ok: false as const, error: "WooCommerce keys missing" };
+    try {
+      const [orderRes, notesRes] = await Promise.all([
+        fetch(`${c.url.replace(/\/$/, "")}/wp-json/wc/v3/orders/${data.order_id}`, { headers: { Authorization: wcAuthHeader(c) } }),
+        fetch(`${c.url.replace(/\/$/, "")}/wp-json/wc/v3/orders/${data.order_id}/notes`, { headers: { Authorization: wcAuthHeader(c) } }),
+      ]);
+      if (!orderRes.ok) return { ok: false as const, error: `HTTP ${orderRes.status}` };
+      const order = await orderRes.json();
+      const notes = notesRes.ok ? await notesRes.json() : [];
+      return { ok: true as const, order, notes };
+    } catch (e) {
+      return { ok: false as const, error: e instanceof Error ? e.message : "Network error" };
+    }
+  });
+
+const AddNoteInput = OrderIdInput.extend({
+  note: z.string().trim().min(1).max(2000),
+  customer_note: z.boolean().default(false),
+});
+
+export const addOrderNote = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d) => AddNoteInput.parse(d))
+  .handler(async ({ data, context }) => {
+    const c = await getCreds(context, data.website_id);
+    if (!c.wc_consumer_key || !c.wc_consumer_secret) throw new Error("WooCommerce keys missing");
+    const res = await fetch(`${c.url.replace(/\/$/, "")}/wp-json/wc/v3/orders/${data.order_id}/notes`, {
+      method: "POST",
+      headers: { Authorization: wcAuthHeader(c), "Content-Type": "application/json" },
+      body: JSON.stringify({ note: data.note, customer_note: data.customer_note }),
+    });
+    if (!res.ok) throw new Error(`Failed to add note: HTTP ${res.status}`);
+    await context.supabase.from("audit_logs").insert({
+      user_id: context.userId, website_id: data.website_id,
+      action: "order.note_added", details: { order_id: data.order_id, customer_note: data.customer_note },
+    });
+    return { ok: true };
+  });
+
+const RefundInput = OrderIdInput.extend({
+  amount: z.string().regex(/^\d+(\.\d{1,2})?$/),
+  reason: z.string().trim().max(500).optional(),
+});
+
+export const refundOrder = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d) => RefundInput.parse(d))
+  .handler(async ({ data, context }) => {
+    const c = await getCreds(context, data.website_id);
+    if (!c.wc_consumer_key || !c.wc_consumer_secret) throw new Error("WooCommerce keys missing");
+    const res = await fetch(`${c.url.replace(/\/$/, "")}/wp-json/wc/v3/orders/${data.order_id}/refunds`, {
+      method: "POST",
+      headers: { Authorization: wcAuthHeader(c), "Content-Type": "application/json" },
+      body: JSON.stringify({ amount: data.amount, reason: data.reason ?? "" }),
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new Error(`Refund failed: HTTP ${res.status} ${text.slice(0, 200)}`);
+    }
+    await context.supabase.from("audit_logs").insert({
+      user_id: context.userId, website_id: data.website_id,
+      action: "order.refunded", details: { order_id: data.order_id, amount: data.amount },
+    });
+    return { ok: true };
+  });
+
+// ---------------- Product create / delete / bulk ----------------
+
+const CreateProductInput = z.object({
+  website_id: z.string().uuid(),
+  name: z.string().trim().min(1).max(200),
+  type: z.enum(["simple", "variable", "grouped", "external"]).default("simple"),
+  regular_price: z.string().optional(),
+  sale_price: z.string().optional(),
+  sku: z.string().optional(),
+  description: z.string().max(20000).optional(),
+  short_description: z.string().max(5000).optional(),
+  status: z.enum(["publish", "draft", "pending", "private"]).default("draft"),
+  stock_quantity: z.number().int().optional().nullable(),
+  stock_status: z.enum(["instock", "outofstock", "onbackorder"]).optional(),
+});
+
+export const createProduct = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d) => CreateProductInput.parse(d))
+  .handler(async ({ data, context }) => {
+    const c = await getCreds(context, data.website_id);
+    if (!c.wc_consumer_key || !c.wc_consumer_secret) throw new Error("WooCommerce keys missing");
+    const { website_id, ...rest } = data;
+    const body: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(rest)) if (v !== undefined && v !== "") body[k] = v;
+    if (body.stock_quantity !== undefined && body.stock_quantity !== null) body.manage_stock = true;
+    const res = await fetch(`${c.url.replace(/\/$/, "")}/wp-json/wc/v3/products`, {
+      method: "POST",
+      headers: { Authorization: wcAuthHeader(c), "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new Error(`Failed to create product: HTTP ${res.status} ${text.slice(0, 200)}`);
+    }
+    const created = await res.json();
+    await context.supabase.from("audit_logs").insert({
+      user_id: context.userId, website_id,
+      action: "product.created", details: { product_id: created.id, name: created.name },
+    });
+    return { ok: true, product: created };
+  });
+
+const DeleteProductInput = z.object({
+  website_id: z.string().uuid(),
+  product_id: z.number().int().positive(),
+  force: z.boolean().default(false),
+});
+
+export const deleteProduct = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d) => DeleteProductInput.parse(d))
+  .handler(async ({ data, context }) => {
+    const c = await getCreds(context, data.website_id);
+    if (!c.wc_consumer_key || !c.wc_consumer_secret) throw new Error("WooCommerce keys missing");
+    const res = await fetch(
+      `${c.url.replace(/\/$/, "")}/wp-json/wc/v3/products/${data.product_id}?force=${data.force ? "true" : "false"}`,
+      { method: "DELETE", headers: { Authorization: wcAuthHeader(c) } },
+    );
+    if (!res.ok) throw new Error(`Failed to delete product: HTTP ${res.status}`);
+    await context.supabase.from("audit_logs").insert({
+      user_id: context.userId, website_id: data.website_id,
+      action: "product.deleted", details: { product_id: data.product_id, force: data.force },
+    });
+    return { ok: true };
+  });
+
+// ---------------- Coupons ----------------
+
+const CouponsListInput = z.object({
+  website_id: z.string().uuid(),
+  page: z.number().int().positive().default(1),
+  per_page: z.number().int().min(1).max(100).default(20),
+  search: z.string().trim().max(200).optional(),
+});
+
+type WCCoupon = {
+  id: number; code: string; amount: string; discount_type: string;
+  date_expires: string | null; usage_count: number; usage_limit: number | null;
+  description: string; free_shipping: boolean;
+};
+
+export const fetchCoupons = createServerFn({ method: "GET" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d) => CouponsListInput.parse(d))
+  .handler(async ({ data, context }) => {
+    const c = await getCreds(context, data.website_id);
+    if (!c.wc_consumer_key || !c.wc_consumer_secret) {
+      return { ok: false as const, error: "WooCommerce keys missing", coupons: [] as WCCoupon[], paging: { total: 0, totalPages: 0, page: 1, perPage: data.per_page } };
+    }
+    try {
+      const params = new URLSearchParams({ page: String(data.page), per_page: String(data.per_page) });
+      if (data.search) params.set("search", data.search);
+      const res = await fetch(`${c.url.replace(/\/$/, "")}/wp-json/wc/v3/coupons?${params}`, { headers: { Authorization: wcAuthHeader(c) } });
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        return { ok: false as const, error: `HTTP ${res.status} ${text.slice(0, 160)}`, coupons: [] as WCCoupon[], paging: { total: 0, totalPages: 0, page: data.page, perPage: data.per_page } };
+      }
+      return { ok: true as const, coupons: (await res.json()) as WCCoupon[], paging: parsePaging(res, data.per_page, data.page) };
+    } catch (e) {
+      return { ok: false as const, error: e instanceof Error ? e.message : "Network error", coupons: [] as WCCoupon[], paging: { total: 0, totalPages: 0, page: data.page, perPage: data.per_page } };
+    }
+  });
+
+const CouponInput = z.object({
+  website_id: z.string().uuid(),
+  id: z.number().int().positive().optional(),
+  code: z.string().trim().min(1).max(80),
+  discount_type: z.enum(["percent", "fixed_cart", "fixed_product"]).default("percent"),
+  amount: z.string(),
+  description: z.string().max(500).optional(),
+  date_expires: z.string().optional().nullable(),
+  usage_limit: z.number().int().positive().optional().nullable(),
+  free_shipping: z.boolean().optional(),
+  individual_use: z.boolean().optional(),
+});
+
+export const saveCoupon = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d) => CouponInput.parse(d))
+  .handler(async ({ data, context }) => {
+    const c = await getCreds(context, data.website_id);
+    if (!c.wc_consumer_key || !c.wc_consumer_secret) throw new Error("WooCommerce keys missing");
+    const { website_id, id, ...rest } = data;
+    const body: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(rest)) if (v !== undefined && v !== "") body[k] = v;
+    const url = id
+      ? `${c.url.replace(/\/$/, "")}/wp-json/wc/v3/coupons/${id}`
+      : `${c.url.replace(/\/$/, "")}/wp-json/wc/v3/coupons`;
+    const res = await fetch(url, {
+      method: id ? "PUT" : "POST",
+      headers: { Authorization: wcAuthHeader(c), "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new Error(`Coupon save failed: HTTP ${res.status} ${text.slice(0, 200)}`);
+    }
+    const saved = await res.json();
+    await context.supabase.from("audit_logs").insert({
+      user_id: context.userId, website_id,
+      action: id ? "coupon.updated" : "coupon.created",
+      details: { coupon_id: saved.id, code: saved.code },
+    });
+    return { ok: true, coupon: saved };
+  });
+
+const DeleteCouponInput = z.object({ website_id: z.string().uuid(), id: z.number().int().positive() });
+
+export const deleteCoupon = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d) => DeleteCouponInput.parse(d))
+  .handler(async ({ data, context }) => {
+    const c = await getCreds(context, data.website_id);
+    if (!c.wc_consumer_key || !c.wc_consumer_secret) throw new Error("WooCommerce keys missing");
+    const res = await fetch(
+      `${c.url.replace(/\/$/, "")}/wp-json/wc/v3/coupons/${data.id}?force=true`,
+      { method: "DELETE", headers: { Authorization: wcAuthHeader(c) } },
+    );
+    if (!res.ok) throw new Error(`Failed to delete coupon: HTTP ${res.status}`);
+    await context.supabase.from("audit_logs").insert({
+      user_id: context.userId, website_id: data.website_id,
+      action: "coupon.deleted", details: { coupon_id: data.id },
+    });
+    return { ok: true };
+  });
+
+// ---------------- Team / website members ----------------
+// Owners can list, invite (by email lookup), update, and remove members.
+// Email lookup uses the admin client (gated by ownership check in getCreds-style).
+
+const WebsiteIdInput = z.object({ website_id: z.string().uuid() });
+
+type MemberRow = {
+  id: string; user_id: string; permission: string; created_at: string;
+  email: string | null; full_name: string | null;
+};
+
+export const listMembers = createServerFn({ method: "GET" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d) => WebsiteIdInput.parse(d))
+  .handler(async ({ data, context }): Promise<{ ok: true; members: MemberRow[] } | { ok: false; error: string }> => {
+    // Verify access via RLS.
+    const { data: site, error: sErr } = await context.supabase.from("websites").select("id").eq("id", data.website_id).maybeSingle();
+    if (sErr) return { ok: false, error: sErr.message };
+    if (!site) return { ok: false, error: "Not found or access denied" };
+
+    const { data: members, error } = await context.supabase
+      .from("website_members")
+      .select("id, user_id, permission, created_at")
+      .eq("website_id", data.website_id)
+      .order("created_at", { ascending: true });
+    if (error) return { ok: false, error: error.message };
+
+    // Resolve profile info via admin client (members may not be in the same RLS scope).
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const ids = (members ?? []).map((m) => m.user_id);
+    const { data: profs } = ids.length
+      ? await supabaseAdmin.from("profiles").select("id, email, full_name").in("id", ids)
+      : { data: [] as Array<{ id: string; email: string | null; full_name: string | null }> };
+    const map = new Map((profs ?? []).map((p) => [p.id, p]));
+    return {
+      ok: true,
+      members: (members ?? []).map((m) => ({
+        ...m,
+        email: map.get(m.user_id)?.email ?? null,
+        full_name: map.get(m.user_id)?.full_name ?? null,
+      })),
+    };
+  });
+
+const InviteInput = z.object({
+  website_id: z.string().uuid(),
+  email: z.string().trim().email().max(320),
+  permission: z.enum(["view", "edit", "owner"]).default("view"),
+});
+
+export const inviteMember = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d) => InviteInput.parse(d))
+  .handler(async ({ data, context }) => {
+    // Verify owner via RLS: only owners can write website_members rows.
+    const { data: owned } = await context.supabase.from("websites").select("id, owner_id").eq("id", data.website_id).maybeSingle();
+    if (!owned || owned.owner_id !== context.userId) throw new Error("Only the website owner can manage members.");
+
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { data: prof, error } = await supabaseAdmin.from("profiles").select("id, email").eq("email", data.email.toLowerCase()).maybeSingle();
+    if (error) throw new Error(error.message);
+    if (!prof) throw new Error("No registered user with that email yet. Ask them to sign up first.");
+
+    const { error: insErr } = await context.supabase.from("website_members").insert({
+      website_id: data.website_id, user_id: prof.id, permission: data.permission,
+    });
+    if (insErr) {
+      if (/duplicate|unique/i.test(insErr.message)) throw new Error("This user is already a member.");
+      throw new Error(friendlyDbError(insErr, "Could not add member."));
+    }
+    await context.supabase.from("audit_logs").insert({
+      user_id: context.userId, website_id: data.website_id,
+      action: "website.member_added", details: { member_user_id: prof.id, permission: data.permission, email: data.email },
+    });
+    return { ok: true };
+  });
+
+const MemberUpdate = z.object({
+  website_id: z.string().uuid(),
+  member_id: z.string().uuid(),
+  permission: z.enum(["view", "edit", "owner"]),
+});
+
+export const updateMember = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d) => MemberUpdate.parse(d))
+  .handler(async ({ data, context }) => {
+    const { error } = await context.supabase
+      .from("website_members").update({ permission: data.permission })
+      .eq("id", data.member_id).eq("website_id", data.website_id);
+    if (error) throw new Error(error.message);
+    await context.supabase.from("audit_logs").insert({
+      user_id: context.userId, website_id: data.website_id,
+      action: "website.member_updated", details: { member_id: data.member_id, permission: data.permission },
+    });
+    return { ok: true };
+  });
+
+const MemberRemove = z.object({ website_id: z.string().uuid(), member_id: z.string().uuid() });
+
+export const removeMember = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d) => MemberRemove.parse(d))
+  .handler(async ({ data, context }) => {
+    const { error } = await context.supabase
+      .from("website_members").delete()
+      .eq("id", data.member_id).eq("website_id", data.website_id);
+    if (error) throw new Error(error.message);
+    await context.supabase.from("audit_logs").insert({
+      user_id: context.userId, website_id: data.website_id,
+      action: "website.member_removed", details: { member_id: data.member_id },
+    });
+    return { ok: true };
+  });
