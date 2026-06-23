@@ -65,6 +65,7 @@ function OrdersTable({ websiteId }: { websiteId: string }) {
   const [page, setPage] = useState(1);
   const [perPage, setPerPage] = useState(20);
   const [updatingId, setUpdatingId] = useState<number | null>(null);
+  const [detailId, setDetailId] = useState<number | null>(null);
 
   useEffect(() => {
     const t = setTimeout(() => { setSearch(q); setPage(1); }, 300);
