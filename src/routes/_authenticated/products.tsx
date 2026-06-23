@@ -169,15 +169,25 @@ function ProductsTable({ websiteId }: { websiteId: string }) {
                         </div>
                       </TableCell>
                       <TableCell>
-                        {isVariable ? (
-                          <Button size="sm" variant="ghost" onClick={() => setVariationsFor(p)}>
-                            <Layers className="mr-1 h-3 w-3" /> Variations
-                          </Button>
-                        ) : (
-                          <Button size="sm" variant="ghost" onClick={() => setEditing(p)}>
-                            <Pencil className="h-3 w-3" />
-                          </Button>
-                        )}
+                        <div className="flex items-center gap-1">
+                          {isVariable ? (
+                            <Button size="sm" variant="ghost" onClick={() => setVariationsFor(p)}>
+                              <Layers className="mr-1 h-3 w-3" /> Variations
+                            </Button>
+                          ) : (
+                            <Button size="sm" variant="ghost" onClick={() => setEditing(p)}>
+                              <Pencil className="h-3 w-3" />
+                            </Button>
+                          )}
+                          <Button size="sm" variant="ghost" className="text-destructive" onClick={async () => {
+                            if (!confirm(`Delete "${p.name}"? (moves to trash)`)) return;
+                            try {
+                              await del({ data: { website_id: websiteId, product_id: p.id, force: false } });
+                              toast.success("Deleted");
+                              qc.invalidateQueries({ queryKey: ["products", websiteId] });
+                            } catch (e) { toast.error(e instanceof Error ? e.message : "Delete failed"); }
+                          }}><Trash2 className="h-3 w-3" /></Button>
+                        </div>
                       </TableCell>
                     </TableRow>
                   );
