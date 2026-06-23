@@ -76,6 +76,9 @@ function ProductsTable({ websiteId }: { websiteId: string }) {
   const [perPage, setPerPage] = useState(20);
   const [editing, setEditing] = useState<Product | null>(null);
   const [variationsFor, setVariationsFor] = useState<Product | null>(null);
+  const [creating, setCreating] = useState(false);
+  const del = useServerFn(deleteProduct);
+  const qc = useQueryClient();
 
   // Debounce search input, reset to page 1 on changes.
   useEffect(() => {
