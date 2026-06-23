@@ -118,6 +118,7 @@ function ProductsTable({ websiteId }: { websiteId: string }) {
             <Button size="sm" variant="outline" onClick={() => refetch()} disabled={isFetching}>
               <RefreshCw className={`mr-1 h-3 w-3 ${isFetching ? "animate-spin" : ""}`} /> Refresh
             </Button>
+            <Button size="sm" onClick={() => setCreating(true)}><Plus className="mr-1 h-3 w-3" /> New product</Button>
           </div>
         </CardHeader>
         <CardContent>
