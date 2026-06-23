@@ -209,7 +209,103 @@ function ProductsTable({ websiteId }: { websiteId: string }) {
 
       <EditProductDialog websiteId={websiteId} product={editing} onClose={() => setEditing(null)} />
       <VariationsDialog websiteId={websiteId} product={variationsFor} onClose={() => setVariationsFor(null)} />
+      <CreateProductDialog websiteId={websiteId} open={creating} onClose={() => setCreating(false)} />
     </>
+  );
+}
+
+function CreateProductDialog({ websiteId, open, onClose }: { websiteId: string; open: boolean; onClose: () => void }) {
+  const create = useServerFn(createProduct);
+  const qc = useQueryClient();
+  const [saving, setSaving] = useState(false);
+  const [name, setName] = useState("");
+  const [type, setType] = useState<"simple" | "variable" | "grouped" | "external">("simple");
+  const [regular, setRegular] = useState("");
+  const [sale, setSale] = useState("");
+  const [sku, setSku] = useState("");
+  const [stock, setStock] = useState("");
+  const [stockStatus, setStockStatus] = useState<"instock" | "outofstock" | "onbackorder">("instock");
+  const [status, setStatus] = useState<"publish" | "draft" | "pending" | "private">("draft");
+  const [shortDesc, setShortDesc] = useState("");
+  const [desc, setDesc] = useState("");
+
+  const submit = async () => {
+    setSaving(true);
+    try {
+      await create({
+        data: {
+          website_id: websiteId, name, type,
+          regular_price: regular || undefined, sale_price: sale || undefined,
+          sku: sku || undefined, status,
+          stock_quantity: stock ? Number(stock) : null,
+          stock_status: stockStatus,
+          short_description: shortDesc || undefined, description: desc || undefined,
+        },
+      });
+      toast.success("Product created");
+      qc.invalidateQueries({ queryKey: ["products", websiteId] });
+      onClose();
+      setName(""); setRegular(""); setSale(""); setSku(""); setStock(""); setShortDesc(""); setDesc("");
+    } catch (e) { toast.error(e instanceof Error ? e.message : "Create failed"); }
+    finally { setSaving(false); }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-w-2xl">
+        <DialogHeader><DialogTitle>New product</DialogTitle></DialogHeader>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div className="space-y-1.5 sm:col-span-2"><Label>Name</Label><Input value={name} onChange={(e) => setName(e.target.value)} /></div>
+          <div className="space-y-1.5">
+            <Label>Type</Label>
+            <Select value={type} onValueChange={(v) => setType(v as typeof type)}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="simple">Simple</SelectItem>
+                <SelectItem value="variable">Variable</SelectItem>
+                <SelectItem value="grouped">Grouped</SelectItem>
+                <SelectItem value="external">External</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1.5">
+            <Label>Status</Label>
+            <Select value={status} onValueChange={(v) => setStatus(v as typeof status)}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="draft">Draft</SelectItem>
+                <SelectItem value="publish">Published</SelectItem>
+                <SelectItem value="pending">Pending</SelectItem>
+                <SelectItem value="private">Private</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1.5"><Label>Regular price</Label><Input value={regular} onChange={(e) => setRegular(e.target.value)} /></div>
+          <div className="space-y-1.5"><Label>Sale price</Label><Input value={sale} onChange={(e) => setSale(e.target.value)} /></div>
+          <div className="space-y-1.5"><Label>SKU</Label><Input value={sku} onChange={(e) => setSku(e.target.value)} /></div>
+          <div className="space-y-1.5"><Label>Stock qty</Label><Input type="number" value={stock} onChange={(e) => setStock(e.target.value)} /></div>
+          <div className="space-y-1.5 sm:col-span-2">
+            <Label>Stock status</Label>
+            <Select value={stockStatus} onValueChange={(v) => setStockStatus(v as typeof stockStatus)}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="instock">In stock</SelectItem>
+                <SelectItem value="outofstock">Out of stock</SelectItem>
+                <SelectItem value="onbackorder">On backorder</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1.5 sm:col-span-2"><Label>Short description</Label><Textarea rows={2} value={shortDesc} onChange={(e) => setShortDesc(e.target.value)} /></div>
+          <div className="space-y-1.5 sm:col-span-2"><Label>Description</Label><Textarea rows={4} value={desc} onChange={(e) => setDesc(e.target.value)} /></div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button onClick={submit} disabled={saving || !name}>
+            {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null} Create
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
