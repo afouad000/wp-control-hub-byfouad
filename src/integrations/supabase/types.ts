@@ -237,6 +237,16 @@ export type Database = {
         Args: { _user: string; _website: string }
         Returns: boolean
       }
+      get_website_credentials_admin: {
+        Args: { _website_id: string }
+        Returns: {
+          url: string
+          wc_consumer_key: string
+          wc_consumer_secret: string
+          wp_app_password: string
+          wp_username: string
+        }[]
+      }
       has_role: {
         Args: {
           _role: Database["public"]["Enums"]["app_role"]
@@ -245,6 +255,16 @@ export type Database = {
         Returns: boolean
       }
       is_super_admin: { Args: { _user_id: string }; Returns: boolean }
+      set_website_credentials_admin: {
+        Args: {
+          _wc_consumer_key: string
+          _wc_consumer_secret: string
+          _website_id: string
+          _wp_app_password: string
+          _wp_username: string
+        }
+        Returns: undefined
+      }
     }
     Enums: {
       app_role: "super_admin" | "client" | "team_member"
