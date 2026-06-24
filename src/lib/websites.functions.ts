@@ -421,14 +421,14 @@ async function getCreds(context: any, websiteId: string): Promise<Creds> {
   if (error) throw new Error(error.message);
   if (!site) throw new Error("Website not found or access denied.");
 
-  // 2) Read raw credentials via service-role client.
+  // 2) Read raw credentials via service-role RPC against the private schema.
   const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-  const { data: row, error: e2 } = await supabaseAdmin
-    .from("websites")
-    .select("url, wp_username, wp_app_password, wc_consumer_key, wc_consumer_secret")
-    .eq("id", websiteId)
-    .single();
-  if (e2 || !row) throw new Error(e2?.message ?? "Credentials unavailable.");
+  const { data: rows, error: e2 } = await supabaseAdmin.rpc("get_website_credentials_admin", {
+    _website_id: websiteId,
+  });
+  if (e2) throw new Error(e2.message);
+  const row = Array.isArray(rows) ? rows[0] : rows;
+  if (!row) throw new Error("Credentials unavailable.");
   return row as Creds;
 }
 
