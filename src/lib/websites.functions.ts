@@ -106,18 +106,15 @@ export const connectWebsite = createServerFn({ method: "POST" })
       throw new Error(friendlyDbError(error, "Could not save the website. Please try again."));
     }
 
-    // Persist credentials to private schema via service role
+    // Persist credentials to private schema via service role RPC
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-    const { error: credErr } = await supabaseAdmin
-      .schema("private")
-      .from("website_credentials")
-      .upsert({
-        website_id: inserted.id,
-        wp_username: data.wp_username,
-        wp_app_password: data.wp_app_password,
-        wc_consumer_key: data.wc_consumer_key ?? null,
-        wc_consumer_secret: data.wc_consumer_secret ?? null,
-      });
+    const { error: credErr } = await supabaseAdmin.rpc("set_website_credentials_admin", {
+      _website_id: inserted.id,
+      _wp_username: data.wp_username,
+      _wp_app_password: data.wp_app_password,
+      _wc_consumer_key: data.wc_consumer_key ?? null,
+      _wc_consumer_secret: data.wc_consumer_secret ?? null,
+    });
     if (credErr) {
       console.error("[connectWebsite] credentials insert failed", { websiteId: inserted.id, message: credErr.message });
       throw new Error("Saved the website but could not store credentials securely. Please retry.");
