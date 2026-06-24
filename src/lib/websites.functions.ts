@@ -202,14 +202,20 @@ export const reconnectWebsite = createServerFn({ method: "POST" })
         .eq("id", data.id);
       throw new Error(probe.error ?? "Test failed — credentials not updated.");
     }
+    // First verify access via user-scoped client (RLS will block if not owner/no access)
+    const { data: accessCheck, error: accessErr } = await context.supabase
+      .from("websites")
+      .select("id, owner_id")
+      .eq("id", data.id)
+      .maybeSingle();
+    if (accessErr) throw new Error(accessErr.message);
+    if (!accessCheck) throw new Error("Website not found or access denied.");
+
+    // Update non-sensitive fields on public.websites
     const { error } = await context.supabase
       .from("websites")
       .update({
         url: data.url.replace(/\/$/, ""),
-        wp_username: data.wp_username,
-        wp_app_password: data.wp_app_password,
-        wc_consumer_key: data.wc_consumer_key ?? null,
-        wc_consumer_secret: data.wc_consumer_secret ?? null,
         status: "connected",
         connection_status: probe.info.woocommerce ? "connected" : "connected_no_wc",
         last_checked_at: new Date().toISOString(),
@@ -218,6 +224,17 @@ export const reconnectWebsite = createServerFn({ method: "POST" })
       })
       .eq("id", data.id);
     if (error) throw new Error(error.message);
+
+    // Update credentials in the private schema via service role
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { error: credErr } = await supabaseAdmin.rpc("set_website_credentials_admin", {
+      _website_id: data.id,
+      _wp_username: data.wp_username,
+      _wp_app_password: data.wp_app_password,
+      _wc_consumer_key: data.wc_consumer_key ?? "",
+      _wc_consumer_secret: data.wc_consumer_secret ?? "",
+    });
+    if (credErr) throw new Error("Could not update credentials securely.");
     await context.supabase.from("audit_logs").insert({
       user_id: context.userId,
       website_id: data.id,
