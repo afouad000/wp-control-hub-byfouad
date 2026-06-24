@@ -87,10 +87,6 @@ export const connectWebsite = createServerFn({ method: "POST" })
         url: data.url.replace(/\/$/, ""),
         client_name: data.client_name ?? null,
         logo_url: data.logo_url ?? null,
-        wp_username: data.wp_username,
-        wp_app_password: data.wp_app_password,
-        wc_consumer_key: data.wc_consumer_key ?? null,
-        wc_consumer_secret: data.wc_consumer_secret ?? null,
         status: "connected",
         connection_status: probe.info.woocommerce ? "connected" : "connected_no_wc",
         last_checked_at: startedAt,
@@ -110,11 +106,37 @@ export const connectWebsite = createServerFn({ method: "POST" })
       throw new Error(friendlyDbError(error, "Could not save the website. Please try again."));
     }
 
+    // Persist credentials to private schema via service role RPC
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { error: credErr } = await supabaseAdmin.rpc("set_website_credentials_admin", {
+      _website_id: inserted.id,
+      _wp_username: data.wp_username,
+      _wp_app_password: data.wp_app_password,
+      _wc_consumer_key: data.wc_consumer_key ?? "",
+      _wc_consumer_secret: data.wc_consumer_secret ?? "",
+    });
+    if (credErr) {
+      console.error("[connectWebsite] credentials insert failed", { websiteId: inserted.id, message: credErr.message });
+      throw new Error("Saved the website but could not store credentials securely. Please retry.");
+    }
+
     const memberStartedAt = new Date().toISOString();
+    const fullPerms = {
+      view_dashboard: true, view_orders: true, edit_orders: true,
+      view_products: true, edit_products: true,
+      view_customers: true, edit_customers: true,
+      view_coupons: true, manage_coupons: true,
+      view_reports: true, manage_website_settings: true,
+      manage_team: true, view_activity_logs: true,
+    };
     const { error: memberError } = await context.supabase.from("website_members").insert({
       website_id: inserted.id,
       user_id: context.userId,
       permission: "owner",
+      role: "owner",
+      permissions: fullPerms,
+      invitation_status: "accepted",
+      accepted_at: memberStartedAt,
     });
     let alreadyExisted = false;
     if (memberError) {
@@ -180,14 +202,20 @@ export const reconnectWebsite = createServerFn({ method: "POST" })
         .eq("id", data.id);
       throw new Error(probe.error ?? "Test failed — credentials not updated.");
     }
+    // First verify access via user-scoped client (RLS will block if not owner/no access)
+    const { data: accessCheck, error: accessErr } = await context.supabase
+      .from("websites")
+      .select("id, owner_id")
+      .eq("id", data.id)
+      .maybeSingle();
+    if (accessErr) throw new Error(accessErr.message);
+    if (!accessCheck) throw new Error("Website not found or access denied.");
+
+    // Update non-sensitive fields on public.websites
     const { error } = await context.supabase
       .from("websites")
       .update({
         url: data.url.replace(/\/$/, ""),
-        wp_username: data.wp_username,
-        wp_app_password: data.wp_app_password,
-        wc_consumer_key: data.wc_consumer_key ?? null,
-        wc_consumer_secret: data.wc_consumer_secret ?? null,
         status: "connected",
         connection_status: probe.info.woocommerce ? "connected" : "connected_no_wc",
         last_checked_at: new Date().toISOString(),
@@ -196,6 +224,17 @@ export const reconnectWebsite = createServerFn({ method: "POST" })
       })
       .eq("id", data.id);
     if (error) throw new Error(error.message);
+
+    // Update credentials in the private schema via service role
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { error: credErr } = await supabaseAdmin.rpc("set_website_credentials_admin", {
+      _website_id: data.id,
+      _wp_username: data.wp_username,
+      _wp_app_password: data.wp_app_password,
+      _wc_consumer_key: data.wc_consumer_key ?? "",
+      _wc_consumer_secret: data.wc_consumer_secret ?? "",
+    });
+    if (credErr) throw new Error("Could not update credentials securely.");
     await context.supabase.from("audit_logs").insert({
       user_id: context.userId,
       website_id: data.id,
@@ -382,14 +421,14 @@ async function getCreds(context: any, websiteId: string): Promise<Creds> {
   if (error) throw new Error(error.message);
   if (!site) throw new Error("Website not found or access denied.");
 
-  // 2) Read raw credentials via service-role client.
+  // 2) Read raw credentials via service-role RPC against the private schema.
   const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-  const { data: row, error: e2 } = await supabaseAdmin
-    .from("websites")
-    .select("url, wp_username, wp_app_password, wc_consumer_key, wc_consumer_secret")
-    .eq("id", websiteId)
-    .single();
-  if (e2 || !row) throw new Error(e2?.message ?? "Credentials unavailable.");
+  const { data: rows, error: e2 } = await supabaseAdmin.rpc("get_website_credentials_admin", {
+    _website_id: websiteId,
+  });
+  if (e2) throw new Error(e2.message);
+  const row = Array.isArray(rows) ? rows[0] : rows;
+  if (!row) throw new Error("Credentials unavailable.");
   return row as Creds;
 }
 

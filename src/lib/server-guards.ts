@@ -67,3 +67,38 @@ export function friendlyDbError(err: { code?: string; message?: string } | null 
   }
   return fallback;
 }
+
+export type Permission =
+  | "view_dashboard"
+  | "view_orders" | "edit_orders"
+  | "view_products" | "edit_products"
+  | "view_customers" | "edit_customers"
+  | "view_coupons" | "manage_coupons"
+  | "view_reports"
+  | "manage_website_settings"
+  | "manage_team"
+  | "view_activity_logs";
+
+/**
+ * Throws if the current user does not have the given permission on the website.
+ * Uses the SECURITY DEFINER `public.user_can_website` wrapper via the
+ * user-scoped Supabase client (so auth.uid() is the calling user).
+ */
+export async function requirePermission(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  context: any,
+  websiteId: string,
+  permission: Permission,
+): Promise<void> {
+  assertAuthenticatedContext(context);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data, error } = await (context.supabase as any).rpc("user_can_website", {
+    _website_id: websiteId,
+    _permission: permission,
+  });
+  if (error) throw new Error(error.message);
+  if (data !== true) {
+    throw new Error(`You don't have permission to ${permission.replace(/_/g, " ")} on this website.`);
+  }
+}
+

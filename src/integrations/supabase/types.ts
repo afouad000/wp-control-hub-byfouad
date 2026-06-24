@@ -19,7 +19,15 @@ export type Database = {
           action: string
           created_at: string
           details: Json
+          entity_id: string | null
+          entity_type: string | null
+          error_message: string | null
           id: string
+          ip_address: string | null
+          new_value: Json | null
+          old_value: Json | null
+          status: string
+          user_agent: string | null
           user_id: string | null
           website_id: string | null
         }
@@ -27,7 +35,15 @@ export type Database = {
           action: string
           created_at?: string
           details?: Json
+          entity_id?: string | null
+          entity_type?: string | null
+          error_message?: string | null
           id?: string
+          ip_address?: string | null
+          new_value?: Json | null
+          old_value?: Json | null
+          status?: string
+          user_agent?: string | null
           user_id?: string | null
           website_id?: string | null
         }
@@ -35,7 +51,15 @@ export type Database = {
           action?: string
           created_at?: string
           details?: Json
+          entity_id?: string | null
+          entity_type?: string | null
+          error_message?: string | null
           id?: string
+          ip_address?: string | null
+          new_value?: Json | null
+          old_value?: Json | null
+          status?: string
+          user_agent?: string | null
           user_id?: string | null
           website_id?: string | null
         }
@@ -96,23 +120,53 @@ export type Database = {
       }
       website_members: {
         Row: {
+          accepted_at: string | null
           created_at: string
+          expires_at: string | null
           id: string
+          invitation_status: string
+          invite_token: string | null
+          invited_by: string | null
+          invited_email: string | null
           permission: string
+          permissions: Json
+          revoked_at: string | null
+          role: string
+          updated_at: string
           user_id: string
           website_id: string
         }
         Insert: {
+          accepted_at?: string | null
           created_at?: string
+          expires_at?: string | null
           id?: string
+          invitation_status?: string
+          invite_token?: string | null
+          invited_by?: string | null
+          invited_email?: string | null
           permission?: string
+          permissions?: Json
+          revoked_at?: string | null
+          role?: string
+          updated_at?: string
           user_id: string
           website_id: string
         }
         Update: {
+          accepted_at?: string | null
           created_at?: string
+          expires_at?: string | null
           id?: string
+          invitation_status?: string
+          invite_token?: string | null
+          invited_by?: string | null
+          invited_email?: string | null
           permission?: string
+          permissions?: Json
+          revoked_at?: string | null
+          role?: string
+          updated_at?: string
           user_id?: string
           website_id?: string
         }
@@ -141,10 +195,6 @@ export type Database = {
           status: string
           updated_at: string
           url: string
-          wc_consumer_key: string | null
-          wc_consumer_secret: string | null
-          wp_app_password: string | null
-          wp_username: string | null
         }
         Insert: {
           client_name?: string | null
@@ -160,10 +210,6 @@ export type Database = {
           status?: string
           updated_at?: string
           url: string
-          wc_consumer_key?: string | null
-          wc_consumer_secret?: string | null
-          wp_app_password?: string | null
-          wp_username?: string | null
         }
         Update: {
           client_name?: string | null
@@ -179,10 +225,6 @@ export type Database = {
           status?: string
           updated_at?: string
           url?: string
-          wc_consumer_key?: string | null
-          wc_consumer_secret?: string | null
-          wp_app_password?: string | null
-          wp_username?: string | null
         }
         Relationships: []
       }
@@ -195,6 +237,16 @@ export type Database = {
         Args: { _user: string; _website: string }
         Returns: boolean
       }
+      get_website_credentials_admin: {
+        Args: { _website_id: string }
+        Returns: {
+          url: string
+          wc_consumer_key: string
+          wc_consumer_secret: string
+          wp_app_password: string
+          wp_username: string
+        }[]
+      }
       has_role: {
         Args: {
           _role: Database["public"]["Enums"]["app_role"]
@@ -203,6 +255,24 @@ export type Database = {
         Returns: boolean
       }
       is_super_admin: { Args: { _user_id: string }; Returns: boolean }
+      list_my_website_permissions: {
+        Args: { _website_id: string }
+        Returns: Json
+      }
+      set_website_credentials_admin: {
+        Args: {
+          _wc_consumer_key: string
+          _wc_consumer_secret: string
+          _website_id: string
+          _wp_app_password: string
+          _wp_username: string
+        }
+        Returns: undefined
+      }
+      user_can_website: {
+        Args: { _permission: string; _website_id: string }
+        Returns: boolean
+      }
     }
     Enums: {
       app_role: "super_admin" | "client" | "team_member"
