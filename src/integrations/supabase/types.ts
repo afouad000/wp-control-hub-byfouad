@@ -255,6 +255,10 @@ export type Database = {
         Returns: boolean
       }
       is_super_admin: { Args: { _user_id: string }; Returns: boolean }
+      list_my_website_permissions: {
+        Args: { _website_id: string }
+        Returns: Json
+      }
       set_website_credentials_admin: {
         Args: {
           _wc_consumer_key: string
@@ -264,6 +268,10 @@ export type Database = {
           _wp_username: string
         }
         Returns: undefined
+      }
+      user_can_website: {
+        Args: { _permission: string; _website_id: string }
+        Returns: boolean
       }
     }
     Enums: {
