@@ -87,10 +87,6 @@ export const connectWebsite = createServerFn({ method: "POST" })
         url: data.url.replace(/\/$/, ""),
         client_name: data.client_name ?? null,
         logo_url: data.logo_url ?? null,
-        wp_username: data.wp_username,
-        wp_app_password: data.wp_app_password,
-        wc_consumer_key: data.wc_consumer_key ?? null,
-        wc_consumer_secret: data.wc_consumer_secret ?? null,
         status: "connected",
         connection_status: probe.info.woocommerce ? "connected" : "connected_no_wc",
         last_checked_at: startedAt,
@@ -110,11 +106,40 @@ export const connectWebsite = createServerFn({ method: "POST" })
       throw new Error(friendlyDbError(error, "Could not save the website. Please try again."));
     }
 
+    // Persist credentials to private schema via service role
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { error: credErr } = await supabaseAdmin
+      .schema("private")
+      .from("website_credentials")
+      .upsert({
+        website_id: inserted.id,
+        wp_username: data.wp_username,
+        wp_app_password: data.wp_app_password,
+        wc_consumer_key: data.wc_consumer_key ?? null,
+        wc_consumer_secret: data.wc_consumer_secret ?? null,
+      });
+    if (credErr) {
+      console.error("[connectWebsite] credentials insert failed", { websiteId: inserted.id, message: credErr.message });
+      throw new Error("Saved the website but could not store credentials securely. Please retry.");
+    }
+
     const memberStartedAt = new Date().toISOString();
+    const fullPerms = {
+      view_dashboard: true, view_orders: true, edit_orders: true,
+      view_products: true, edit_products: true,
+      view_customers: true, edit_customers: true,
+      view_coupons: true, manage_coupons: true,
+      view_reports: true, manage_website_settings: true,
+      manage_team: true, view_activity_logs: true,
+    };
     const { error: memberError } = await context.supabase.from("website_members").insert({
       website_id: inserted.id,
       user_id: context.userId,
       permission: "owner",
+      role: "owner",
+      permissions: fullPerms,
+      invitation_status: "accepted",
+      accepted_at: memberStartedAt,
     });
     let alreadyExisted = false;
     if (memberError) {
