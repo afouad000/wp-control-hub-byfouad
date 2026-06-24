@@ -112,8 +112,8 @@ export const connectWebsite = createServerFn({ method: "POST" })
       _website_id: inserted.id,
       _wp_username: data.wp_username,
       _wp_app_password: data.wp_app_password,
-      _wc_consumer_key: data.wc_consumer_key ?? null,
-      _wc_consumer_secret: data.wc_consumer_secret ?? null,
+      _wc_consumer_key: data.wc_consumer_key ?? "",
+      _wc_consumer_secret: data.wc_consumer_secret ?? "",
     });
     if (credErr) {
       console.error("[connectWebsite] credentials insert failed", { websiteId: inserted.id, message: credErr.message });
