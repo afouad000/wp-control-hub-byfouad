@@ -91,7 +91,8 @@ export async function requirePermission(
   permission: Permission,
 ): Promise<void> {
   assertAuthenticatedContext(context);
-  const { data, error } = await context.supabase.rpc("user_can_website", {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data, error } = await (context.supabase as any).rpc("user_can_website", {
     _website_id: websiteId,
     _permission: permission,
   });
