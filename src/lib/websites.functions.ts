@@ -1,7 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
-import { assertAuthenticatedContext, friendlyDbError } from "./server-guards";
+import { assertAuthenticatedContext, friendlyDbError, requirePermission, type Permission } from "./server-guards";
 
 const PUBLIC_COLUMNS =
   "id, owner_id, name, url, client_name, logo_url, status, connection_status, last_checked_at, last_error, meta, created_at, updated_at";
@@ -281,7 +281,7 @@ export const refreshWebsite = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d) => IdInput.parse(d))
   .handler(async ({ data, context }) => {
-    const c = await getCreds(context, data.id);
+    const c = await getCreds(context, data.id, "manage_website_settings");
     const probe = await probeSite(c.url, c.wp_username ?? "", c.wp_app_password ?? "", c.wc_consumer_key, c.wc_consumer_secret);
     await context.supabase
       .from("websites")
@@ -296,16 +296,29 @@ export const refreshWebsite = createServerFn({ method: "POST" })
     return probe;
   });
 
+const AuditLogsInput = z.object({
+  website_id: z.string().uuid().optional(),
+  limit: z.number().int().min(1).max(500).default(200),
+}).optional();
+
 export const listAuditLogs = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
-  .handler(async ({ context }) => {
-    const { data, error } = await context.supabase
+  .inputValidator((d) => AuditLogsInput.parse(d) ?? { limit: 200 })
+  .handler(async ({ data, context }) => {
+    // If scoped to a website, require view_activity_logs. Otherwise RLS on
+    // audit_logs will already filter to sites the user can see.
+    if (data?.website_id) {
+      await requirePermission(context, data.website_id, "view_activity_logs");
+    }
+    let q = context.supabase
       .from("audit_logs")
-      .select("id, action, details, website_id, user_id, created_at")
+      .select("id, action, details, website_id, user_id, entity_type, entity_id, old_value, new_value, status, created_at")
       .order("created_at", { ascending: false })
-      .limit(200);
+      .limit(data?.limit ?? 200);
+    if (data?.website_id) q = q.eq("website_id", data.website_id);
+    const { data: rows, error } = await q;
     if (error) throw new Error(error.message);
-    return data ?? [];
+    return rows ?? [];
   });
 
 // ---------- WordPress / WooCommerce probes ----------
@@ -411,15 +424,9 @@ type Creds = {
 };
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function getCreds(context: any, websiteId: string): Promise<Creds> {
-  // 1) Verify access via user-scoped client (RLS).
-  const { data: site, error } = await context.supabase
-    .from("websites")
-    .select("id")
-    .eq("id", websiteId)
-    .maybeSingle();
-  if (error) throw new Error(error.message);
-  if (!site) throw new Error("Website not found or access denied.");
+async function getCreds(context: any, websiteId: string, permission: Permission): Promise<Creds> {
+  // 1) Verify access + specific module permission via SECURITY DEFINER RPC.
+  await requirePermission(context, websiteId, permission);
 
   // 2) Read raw credentials via service-role RPC against the private schema.
   const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
@@ -447,7 +454,7 @@ export const fetchPosts = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d) => SiteScoped.parse(d))
   .handler(async ({ data, context }) => {
-    const c = await getCreds(context, data.website_id);
+    const c = await getCreds(context, data.website_id, "view_dashboard");
     try {
       const res = await fetch(`${c.url.replace(/\/$/, "")}/wp-json/wp/v2/posts?per_page=20&_embed`, {
         headers: { Authorization: wpAuthHeader(c) },
@@ -485,7 +492,7 @@ export const fetchProducts = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d) => ProductsInput.parse(d))
   .handler(async ({ data, context }) => {
-    const c = await getCreds(context, data.website_id);
+    const c = await getCreds(context, data.website_id, "view_products");
     if (!c.wc_consumer_key || !c.wc_consumer_secret) {
       return { ok: false as const, error: "WooCommerce keys missing", products: [] as WCProduct[], paging: { total: 0, totalPages: 0, page: 1, perPage: data.per_page } };
     }
@@ -529,7 +536,7 @@ export const updateProduct = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d) => UpdateProductInput.parse(d))
   .handler(async ({ data, context }) => {
-    const c = await getCreds(context, data.website_id);
+    const c = await getCreds(context, data.website_id, "edit_products");
     if (!c.wc_consumer_key || !c.wc_consumer_secret) throw new Error("WooCommerce keys missing");
     const { website_id, product_id, ...patch } = data;
     const body: Record<string, unknown> = {};
@@ -580,7 +587,7 @@ export const fetchVariations = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d) => VariationsInput.parse(d))
   .handler(async ({ data, context }) => {
-    const c = await getCreds(context, data.website_id);
+    const c = await getCreds(context, data.website_id, "view_products");
     if (!c.wc_consumer_key || !c.wc_consumer_secret) {
       return { ok: false as const, error: "WooCommerce keys missing", variations: [] as WCVariation[], paging: { total: 0, totalPages: 0, page: 1, perPage: data.per_page } };
     }
@@ -619,7 +626,7 @@ export const updateVariation = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d) => UpdateVariationInput.parse(d))
   .handler(async ({ data, context }) => {
-    const c = await getCreds(context, data.website_id);
+    const c = await getCreds(context, data.website_id, "edit_products");
     if (!c.wc_consumer_key || !c.wc_consumer_secret) throw new Error("WooCommerce keys missing");
     const { website_id, product_id, variation_id, ...patch } = data;
     const body: Record<string, unknown> = {};
@@ -670,7 +677,7 @@ export const fetchOrders = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d) => OrdersInput.parse(d))
   .handler(async ({ data, context }) => {
-    const c = await getCreds(context, data.website_id);
+    const c = await getCreds(context, data.website_id, "view_orders");
     if (!c.wc_consumer_key || !c.wc_consumer_secret) {
       return { ok: false as const, error: "WooCommerce keys missing", orders: [] as WCOrder[], paging: { total: 0, totalPages: 0, page: 1, perPage: data.per_page } };
     }
@@ -711,7 +718,7 @@ export const updateOrderStatus = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d) => UpdateOrderInput.parse(d))
   .handler(async ({ data, context }) => {
-    const c = await getCreds(context, data.website_id);
+    const c = await getCreds(context, data.website_id, "edit_orders");
     if (!c.wc_consumer_key || !c.wc_consumer_secret) throw new Error("WooCommerce keys missing");
     const res = await fetch(`${c.url.replace(/\/$/, "")}/wp-json/wc/v3/orders/${data.order_id}`, {
       method: "PUT",
@@ -747,7 +754,7 @@ export const fetchCustomers = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d) => CustomersInput.parse(d))
   .handler(async ({ data, context }) => {
-    const c = await getCreds(context, data.website_id);
+    const c = await getCreds(context, data.website_id, "view_customers");
     if (!c.wc_consumer_key || !c.wc_consumer_secret) {
       return { ok: false as const, error: "WooCommerce keys missing", customers: [] as WCCustomer[], paging: { total: 0, totalPages: 0, page: 1, perPage: data.per_page } };
     }
@@ -782,7 +789,7 @@ export const fetchOrder = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d) => OrderIdInput.parse(d))
   .handler(async ({ data, context }) => {
-    const c = await getCreds(context, data.website_id);
+    const c = await getCreds(context, data.website_id, "view_orders");
     if (!c.wc_consumer_key || !c.wc_consumer_secret) return { ok: false as const, error: "WooCommerce keys missing" };
     try {
       const [orderRes, notesRes] = await Promise.all([
@@ -807,7 +814,7 @@ export const addOrderNote = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d) => AddNoteInput.parse(d))
   .handler(async ({ data, context }) => {
-    const c = await getCreds(context, data.website_id);
+    const c = await getCreds(context, data.website_id, "edit_orders");
     if (!c.wc_consumer_key || !c.wc_consumer_secret) throw new Error("WooCommerce keys missing");
     const res = await fetch(`${c.url.replace(/\/$/, "")}/wp-json/wc/v3/orders/${data.order_id}/notes`, {
       method: "POST",
@@ -831,7 +838,7 @@ export const refundOrder = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d) => RefundInput.parse(d))
   .handler(async ({ data, context }) => {
-    const c = await getCreds(context, data.website_id);
+    const c = await getCreds(context, data.website_id, "edit_orders");
     if (!c.wc_consumer_key || !c.wc_consumer_secret) throw new Error("WooCommerce keys missing");
     const res = await fetch(`${c.url.replace(/\/$/, "")}/wp-json/wc/v3/orders/${data.order_id}/refunds`, {
       method: "POST",
@@ -869,7 +876,7 @@ export const createProduct = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d) => CreateProductInput.parse(d))
   .handler(async ({ data, context }) => {
-    const c = await getCreds(context, data.website_id);
+    const c = await getCreds(context, data.website_id, "edit_products");
     if (!c.wc_consumer_key || !c.wc_consumer_secret) throw new Error("WooCommerce keys missing");
     const { website_id, ...rest } = data;
     const body: Record<string, unknown> = {};
@@ -902,7 +909,7 @@ export const deleteProduct = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d) => DeleteProductInput.parse(d))
   .handler(async ({ data, context }) => {
-    const c = await getCreds(context, data.website_id);
+    const c = await getCreds(context, data.website_id, "edit_products");
     if (!c.wc_consumer_key || !c.wc_consumer_secret) throw new Error("WooCommerce keys missing");
     const res = await fetch(
       `${c.url.replace(/\/$/, "")}/wp-json/wc/v3/products/${data.product_id}?force=${data.force ? "true" : "false"}`,
@@ -935,7 +942,7 @@ export const fetchCoupons = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d) => CouponsListInput.parse(d))
   .handler(async ({ data, context }) => {
-    const c = await getCreds(context, data.website_id);
+    const c = await getCreds(context, data.website_id, "view_coupons");
     if (!c.wc_consumer_key || !c.wc_consumer_secret) {
       return { ok: false as const, error: "WooCommerce keys missing", coupons: [] as WCCoupon[], paging: { total: 0, totalPages: 0, page: 1, perPage: data.per_page } };
     }
@@ -970,7 +977,7 @@ export const saveCoupon = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d) => CouponInput.parse(d))
   .handler(async ({ data, context }) => {
-    const c = await getCreds(context, data.website_id);
+    const c = await getCreds(context, data.website_id, "manage_coupons");
     if (!c.wc_consumer_key || !c.wc_consumer_secret) throw new Error("WooCommerce keys missing");
     const { website_id, id, ...rest } = data;
     const body: Record<string, unknown> = {};
@@ -1002,7 +1009,7 @@ export const deleteCoupon = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d) => DeleteCouponInput.parse(d))
   .handler(async ({ data, context }) => {
-    const c = await getCreds(context, data.website_id);
+    const c = await getCreds(context, data.website_id, "manage_coupons");
     if (!c.wc_consumer_key || !c.wc_consumer_secret) throw new Error("WooCommerce keys missing");
     const res = await fetch(
       `${c.url.replace(/\/$/, "")}/wp-json/wc/v3/coupons/${data.id}?force=true`,
@@ -1022,8 +1029,30 @@ export const deleteCoupon = createServerFn({ method: "POST" })
 
 const WebsiteIdInput = z.object({ website_id: z.string().uuid() });
 
+const DEFAULT_PERMS: Record<string, boolean> = {
+  view_dashboard: true,
+  view_orders: false, edit_orders: false,
+  view_products: false, edit_products: false,
+  view_customers: false, edit_customers: false,
+  view_coupons: false, manage_coupons: false,
+  view_reports: false,
+  manage_website_settings: false,
+  manage_team: false,
+  view_activity_logs: false,
+};
+
+const ROLE_PRESETS: Record<string, Record<string, boolean>> = {
+  owner: Object.fromEntries(Object.keys(DEFAULT_PERMS).map((k) => [k, true])),
+  admin: { ...DEFAULT_PERMS, view_orders: true, edit_orders: true, view_products: true, edit_products: true, view_customers: true, edit_customers: true, view_coupons: true, manage_coupons: true, view_reports: true, view_activity_logs: true, manage_website_settings: true },
+  editor: { ...DEFAULT_PERMS, view_orders: true, edit_orders: true, view_products: true, edit_products: true, view_coupons: true, manage_coupons: true, view_customers: true },
+  viewer: { ...DEFAULT_PERMS, view_orders: true, view_products: true, view_customers: true, view_coupons: true, view_reports: true },
+};
+
 type MemberRow = {
-  id: string; user_id: string; permission: string; created_at: string;
+  id: string; user_id: string; permission: string; role: string | null;
+  permissions: Record<string, boolean> | null;
+  invitation_status: string | null;
+  created_at: string;
   email: string | null; full_name: string | null;
 };
 
@@ -1031,19 +1060,17 @@ export const listMembers = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d) => WebsiteIdInput.parse(d))
   .handler(async ({ data, context }): Promise<{ ok: true; members: MemberRow[] } | { ok: false; error: string }> => {
-    // Verify access via RLS.
     const { data: site, error: sErr } = await context.supabase.from("websites").select("id").eq("id", data.website_id).maybeSingle();
     if (sErr) return { ok: false, error: sErr.message };
     if (!site) return { ok: false, error: "Not found or access denied" };
 
     const { data: members, error } = await context.supabase
       .from("website_members")
-      .select("id, user_id, permission, created_at")
+      .select("id, user_id, permission, role, permissions, invitation_status, created_at")
       .eq("website_id", data.website_id)
       .order("created_at", { ascending: true });
     if (error) return { ok: false, error: error.message };
 
-    // Resolve profile info via admin client (members may not be in the same RLS scope).
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
     const ids = (members ?? []).map((m) => m.user_id);
     const { data: profs } = ids.length
@@ -1053,7 +1080,7 @@ export const listMembers = createServerFn({ method: "GET" })
     return {
       ok: true,
       members: (members ?? []).map((m) => ({
-        ...m,
+        ...(m as MemberRow),
         email: map.get(m.user_id)?.email ?? null,
         full_name: map.get(m.user_id)?.full_name ?? null,
       })),
@@ -1063,24 +1090,27 @@ export const listMembers = createServerFn({ method: "GET" })
 const InviteInput = z.object({
   website_id: z.string().uuid(),
   email: z.string().trim().email().max(320),
-  permission: z.enum(["view", "edit", "owner"]).default("view"),
+  role: z.enum(["admin", "editor", "viewer"]).default("viewer"),
 });
 
 export const inviteMember = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d) => InviteInput.parse(d))
   .handler(async ({ data, context }) => {
-    // Verify owner via RLS: only owners can write website_members rows.
-    const { data: owned } = await context.supabase.from("websites").select("id, owner_id").eq("id", data.website_id).maybeSingle();
-    if (!owned || owned.owner_id !== context.userId) throw new Error("Only the website owner can manage members.");
+    await requirePermission(context, data.website_id, "manage_team");
 
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
     const { data: prof, error } = await supabaseAdmin.from("profiles").select("id, email").eq("email", data.email.toLowerCase()).maybeSingle();
     if (error) throw new Error(error.message);
     if (!prof) throw new Error("No registered user with that email yet. Ask them to sign up first.");
 
+    const perms = ROLE_PRESETS[data.role] ?? ROLE_PRESETS.viewer;
+    const legacyPermission = data.role === "admin" ? "edit" : data.role === "editor" ? "edit" : "view";
     const { error: insErr } = await context.supabase.from("website_members").insert({
-      website_id: data.website_id, user_id: prof.id, permission: data.permission,
+      website_id: data.website_id, user_id: prof.id,
+      permission: legacyPermission, role: data.role,
+      permissions: perms, invitation_status: "accepted",
+      accepted_at: new Date().toISOString(),
     });
     if (insErr) {
       if (/duplicate|unique/i.test(insErr.message)) throw new Error("This user is already a member.");
@@ -1088,7 +1118,9 @@ export const inviteMember = createServerFn({ method: "POST" })
     }
     await context.supabase.from("audit_logs").insert({
       user_id: context.userId, website_id: data.website_id,
-      action: "website.member_added", details: { member_user_id: prof.id, permission: data.permission, email: data.email },
+      action: "website.member_added",
+      entity_type: "member", entity_id: prof.id,
+      new_value: { role: data.role, permissions: perms, email: data.email },
     });
     return { ok: true };
   });
@@ -1096,20 +1128,40 @@ export const inviteMember = createServerFn({ method: "POST" })
 const MemberUpdate = z.object({
   website_id: z.string().uuid(),
   member_id: z.string().uuid(),
-  permission: z.enum(["view", "edit", "owner"]),
+  role: z.enum(["admin", "editor", "viewer", "owner"]).optional(),
+  permissions: z.record(z.string(), z.boolean()).optional(),
 });
 
 export const updateMember = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d) => MemberUpdate.parse(d))
   .handler(async ({ data, context }) => {
+    await requirePermission(context, data.website_id, "manage_team");
+
+    const patch: Record<string, unknown> = {};
+    if (data.role) {
+      patch.role = data.role;
+      patch.permission = data.role === "viewer" ? "view" : data.role === "owner" ? "owner" : "edit";
+      if (!data.permissions) patch.permissions = ROLE_PRESETS[data.role] ?? ROLE_PRESETS.viewer;
+    }
+    if (data.permissions) patch.permissions = data.permissions;
+
+    const { data: before } = await context.supabase
+      .from("website_members").select("role, permissions")
+      .eq("id", data.member_id).eq("website_id", data.website_id).maybeSingle();
+
     const { error } = await context.supabase
-      .from("website_members").update({ permission: data.permission })
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      .from("website_members").update(patch as any)
       .eq("id", data.member_id).eq("website_id", data.website_id);
-    if (error) throw new Error(error.message);
+    if (error) throw new Error(friendlyDbError(error, "Could not update member."));
+
     await context.supabase.from("audit_logs").insert({
       user_id: context.userId, website_id: data.website_id,
-      action: "website.member_updated", details: { member_id: data.member_id, permission: data.permission },
+      action: "website.member_updated",
+      entity_type: "member", entity_id: data.member_id,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      old_value: (before ?? null) as any, new_value: patch as any,
     });
     return { ok: true };
   });
@@ -1120,13 +1172,22 @@ export const removeMember = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d) => MemberRemove.parse(d))
   .handler(async ({ data, context }) => {
+    await requirePermission(context, data.website_id, "manage_team");
+    const { data: before } = await context.supabase
+      .from("website_members").select("user_id, role, permissions")
+      .eq("id", data.member_id).eq("website_id", data.website_id).maybeSingle();
+    if (before && (before as { role?: string }).role === "owner") {
+      throw new Error("The owner cannot be removed.");
+    }
     const { error } = await context.supabase
       .from("website_members").delete()
       .eq("id", data.member_id).eq("website_id", data.website_id);
     if (error) throw new Error(error.message);
     await context.supabase.from("audit_logs").insert({
       user_id: context.userId, website_id: data.website_id,
-      action: "website.member_removed", details: { member_id: data.member_id },
+      action: "website.member_removed",
+      entity_type: "member", entity_id: data.member_id,
+      old_value: before ?? null,
     });
     return { ok: true };
   });

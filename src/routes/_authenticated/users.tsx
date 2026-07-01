@@ -1,16 +1,18 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
-import { useState } from "react";
-import { Loader2, UserPlus, Trash2, Users } from "lucide-react";
+import { useMemo, useState } from "react";
+import { Loader2, UserPlus, Trash2, Users, Settings2 } from "lucide-react";
 import { PageHeader, EmptyState } from "@/components/page-header";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import {
   listWebsites, listMembers, inviteMember, updateMember, removeMember,
 } from "@/lib/websites.functions";
@@ -21,6 +23,40 @@ export const Route = createFileRoute("/_authenticated/users")({
   component: UsersPage,
 });
 
+type RolePreset = "admin" | "editor" | "viewer" | "owner";
+
+const PERMISSION_GROUPS: { title: string; keys: { key: string; label: string }[] }[] = [
+  { title: "Overview", keys: [
+    { key: "view_dashboard", label: "View dashboard" },
+    { key: "view_reports", label: "View reports" },
+    { key: "view_activity_logs", label: "View activity logs" },
+  ] },
+  { title: "Orders", keys: [
+    { key: "view_orders", label: "View orders" },
+    { key: "edit_orders", label: "Manage orders (status, notes, refunds)" },
+  ] },
+  { title: "Products", keys: [
+    { key: "view_products", label: "View products" },
+    { key: "edit_products", label: "Create / edit / delete products" },
+  ] },
+  { title: "Customers", keys: [
+    { key: "view_customers", label: "View customers" },
+    { key: "edit_customers", label: "Edit customers" },
+  ] },
+  { title: "Coupons", keys: [
+    { key: "view_coupons", label: "View coupons" },
+    { key: "manage_coupons", label: "Create / edit coupons" },
+  ] },
+  { title: "Admin", keys: [
+    { key: "manage_website_settings", label: "Website settings & reconnect" },
+    { key: "manage_team", label: "Invite / manage team" },
+  ] },
+];
+
+const ROLE_LABEL: Record<string, string> = {
+  owner: "Owner", admin: "Admin", editor: "Editor", viewer: "Viewer",
+};
+
 function UsersPage() {
   const listFn = useServerFn(listWebsites);
   const { data: sites = [] } = useQuery({ queryKey: ["websites"], queryFn: () => listFn() });
@@ -29,7 +65,7 @@ function UsersPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader title="Users & permissions" description="Invite teammates per website and choose what they can do." />
+      <PageHeader title="Users & permissions" description="Invite teammates per website with fine-grained module permissions." />
       {sites.length === 0 ? (
         <Card>
           <CardHeader><CardTitle className="text-base">Team</CardTitle><CardDescription>Connect a website to start inviting members.</CardDescription></CardHeader>
@@ -51,6 +87,13 @@ function UsersPage() {
   );
 }
 
+type Member = {
+  id: string; user_id: string; permission: string; role: string | null;
+  permissions: Record<string, boolean> | null;
+  invitation_status: string | null;
+  created_at: string; email: string | null; full_name: string | null;
+};
+
 function MembersCard({ websiteId }: { websiteId: string }) {
   const fn = useServerFn(listMembers);
   const inv = useServerFn(inviteMember);
@@ -59,22 +102,24 @@ function MembersCard({ websiteId }: { websiteId: string }) {
   const qc = useQueryClient();
 
   const [email, setEmail] = useState("");
-  const [perm, setPerm] = useState<"view" | "edit" | "owner">("view");
+  const [role, setRole] = useState<Exclude<RolePreset, "owner">>("viewer");
   const [inviting, setInviting] = useState(false);
+  const [editing, setEditing] = useState<Member | null>(null);
 
   const { data, isLoading, refetch } = useQuery({
     queryKey: ["members", websiteId],
     queryFn: () => fn({ data: { website_id: websiteId } }),
   });
 
+  const refresh = () => { refetch(); qc.invalidateQueries({ queryKey: ["members", websiteId] }); };
+
   const invite = async () => {
     setInviting(true);
     try {
-      await inv({ data: { website_id: websiteId, email, permission: perm } });
+      await inv({ data: { website_id: websiteId, email, role } });
       toast.success("Member added");
       setEmail("");
-      refetch();
-      qc.invalidateQueries({ queryKey: ["members", websiteId] });
+      refresh();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to invite");
     } finally {
@@ -82,11 +127,11 @@ function MembersCard({ websiteId }: { websiteId: string }) {
     }
   };
 
-  const changePerm = async (id: string, p: "view" | "edit" | "owner") => {
+  const changeRole = async (m: Member, r: RolePreset) => {
     try {
-      await upd({ data: { website_id: websiteId, member_id: id, permission: p } });
-      toast.success("Updated");
-      refetch();
+      await upd({ data: { website_id: websiteId, member_id: m.id, role: r } });
+      toast.success("Role updated");
+      refresh();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed");
     }
@@ -97,91 +142,182 @@ function MembersCard({ websiteId }: { websiteId: string }) {
     try {
       await del({ data: { website_id: websiteId, member_id: id } });
       toast.success("Removed");
-      refetch();
+      refresh();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed");
     }
   };
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-base">Team members</CardTitle>
-        <CardDescription>
-          Roles: <span className="font-medium">Owner</span> (full access), <span className="font-medium">Edit</span> (manage products/orders), <span className="font-medium">View</span> (read-only).
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <div className="grid gap-2 sm:grid-cols-[1fr_140px_auto]">
-          <div className="space-y-1.5">
-            <Label className="sr-only">Email</Label>
-            <Input placeholder="teammate@example.com" value={email} onChange={(e) => setEmail(e.target.value)} />
+    <>
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Team members</CardTitle>
+          <CardDescription>
+            Role presets set sensible defaults. Use <span className="font-medium">Customize</span> to fine-tune module permissions.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid gap-2 sm:grid-cols-[1fr_140px_auto]">
+            <div className="space-y-1.5">
+              <Label className="sr-only">Email</Label>
+              <Input placeholder="teammate@example.com" value={email} onChange={(e) => setEmail(e.target.value)} />
+            </div>
+            <Select value={role} onValueChange={(v) => setRole(v as typeof role)}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="viewer">Viewer</SelectItem>
+                <SelectItem value="editor">Editor</SelectItem>
+                <SelectItem value="admin">Admin</SelectItem>
+              </SelectContent>
+            </Select>
+            <Button onClick={invite} disabled={inviting || !email}>
+              {inviting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <UserPlus className="mr-2 h-4 w-4" />}
+              Invite
+            </Button>
           </div>
-          <Select value={perm} onValueChange={(v) => setPerm(v as typeof perm)}>
-            <SelectTrigger><SelectValue /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="view">View</SelectItem>
-              <SelectItem value="edit">Edit</SelectItem>
-              <SelectItem value="owner">Owner</SelectItem>
-            </SelectContent>
-          </Select>
-          <Button onClick={invite} disabled={inviting || !email}>
-            {inviting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <UserPlus className="mr-2 h-4 w-4" />}
-            Invite
-          </Button>
-        </div>
 
-        {isLoading ? (
-          <div className="h-24 animate-pulse rounded bg-muted" />
-        ) : !data?.ok ? (
-          <p className="text-sm text-destructive">{data?.error ?? "Failed to load"}</p>
-        ) : data.members.length === 0 ? (
-          <EmptyState title="No members yet" />
-        ) : (
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Member</TableHead>
-                <TableHead>Role</TableHead>
-                <TableHead>Joined</TableHead>
-                <TableHead></TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {data.members.map((m) => (
-                <TableRow key={m.id}>
-                  <TableCell>
-                    <div className="font-medium">{m.full_name || m.email || "Unknown"}</div>
-                    {m.email ? <div className="text-xs text-muted-foreground">{m.email}</div> : null}
-                  </TableCell>
-                  <TableCell>
-                    {m.permission === "owner" ? (
-                      <Badge>Owner</Badge>
-                    ) : (
-                      <Select value={m.permission} onValueChange={(v) => changePerm(m.id, v as "view" | "edit" | "owner")}>
-                        <SelectTrigger className="h-8 w-28"><SelectValue /></SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="view">View</SelectItem>
-                          <SelectItem value="edit">Edit</SelectItem>
-                          <SelectItem value="owner">Owner</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    )}
-                  </TableCell>
-                  <TableCell className="text-xs text-muted-foreground">{new Date(m.created_at).toLocaleDateString()}</TableCell>
-                  <TableCell>
-                    {m.permission !== "owner" ? (
-                      <Button size="sm" variant="ghost" onClick={() => remove(m.id)} className="text-destructive">
-                        <Trash2 className="h-3 w-3" />
-                      </Button>
-                    ) : null}
-                  </TableCell>
+          {isLoading ? (
+            <div className="h-24 animate-pulse rounded bg-muted" />
+          ) : !data?.ok ? (
+            <p className="text-sm text-destructive">{data?.error ?? "Failed to load"}</p>
+          ) : data.members.length === 0 ? (
+            <EmptyState title="No members yet" />
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Member</TableHead>
+                  <TableHead>Role</TableHead>
+                  <TableHead>Modules</TableHead>
+                  <TableHead>Joined</TableHead>
+                  <TableHead></TableHead>
                 </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        )}
-      </CardContent>
-    </Card>
+              </TableHeader>
+              <TableBody>
+                {data.members.map((m) => {
+                  const r = (m.role || m.permission || "viewer") as RolePreset;
+                  const isOwner = r === "owner";
+                  const grantedCount = m.permissions ? Object.values(m.permissions).filter(Boolean).length : 0;
+                  return (
+                    <TableRow key={m.id}>
+                      <TableCell>
+                        <div className="font-medium">{m.full_name || m.email || "Unknown"}</div>
+                        {m.email ? <div className="text-xs text-muted-foreground">{m.email}</div> : null}
+                      </TableCell>
+                      <TableCell>
+                        {isOwner ? (
+                          <Badge>Owner</Badge>
+                        ) : (
+                          <Select value={r} onValueChange={(v) => changeRole(m as Member, v as RolePreset)}>
+                            <SelectTrigger className="h-8 w-28"><SelectValue /></SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="viewer">Viewer</SelectItem>
+                              <SelectItem value="editor">Editor</SelectItem>
+                              <SelectItem value="admin">Admin</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-xs text-muted-foreground">
+                        {isOwner ? "All" : `${grantedCount} enabled`}
+                      </TableCell>
+                      <TableCell className="text-xs text-muted-foreground">{new Date(m.created_at).toLocaleDateString()}</TableCell>
+                      <TableCell className="text-right">
+                        <div className="flex justify-end gap-1">
+                          {!isOwner ? (
+                            <Button size="sm" variant="ghost" onClick={() => setEditing(m as Member)} title="Customize permissions">
+                              <Settings2 className="h-3.5 w-3.5" />
+                            </Button>
+                          ) : null}
+                          {!isOwner ? (
+                            <Button size="sm" variant="ghost" onClick={() => remove(m.id)} className="text-destructive">
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </Button>
+                          ) : null}
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+
+      {editing ? (
+        <PermissionsDialog
+          websiteId={websiteId}
+          member={editing}
+          onClose={() => setEditing(null)}
+          onSaved={() => { setEditing(null); refresh(); }}
+        />
+      ) : null}
+    </>
+  );
+}
+
+function PermissionsDialog({
+  websiteId, member, onClose, onSaved,
+}: { websiteId: string; member: Member; onClose: () => void; onSaved: () => void }) {
+  const upd = useServerFn(updateMember);
+  const initial = useMemo<Record<string, boolean>>(() => {
+    const base: Record<string, boolean> = {};
+    for (const g of PERMISSION_GROUPS) for (const k of g.keys) base[k.key] = false;
+    return { ...base, ...(member.permissions ?? {}) };
+  }, [member]);
+  const [perms, setPerms] = useState<Record<string, boolean>>(initial);
+  const [saving, setSaving] = useState(false);
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      await upd({ data: { website_id: websiteId, member_id: member.id, permissions: perms } });
+      toast.success("Permissions updated");
+      onSaved();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent className="max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>Customize permissions</DialogTitle>
+          <DialogDescription>
+            {member.full_name || member.email} · Role: {ROLE_LABEL[member.role || member.permission] ?? "Member"}
+          </DialogDescription>
+        </DialogHeader>
+        <div className="grid gap-5 sm:grid-cols-2 max-h-[60vh] overflow-y-auto pr-1">
+          {PERMISSION_GROUPS.map((g) => (
+            <div key={g.title} className="space-y-2">
+              <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{g.title}</div>
+              <div className="space-y-2 rounded-md border p-3">
+                {g.keys.map((k) => (
+                  <label key={k.key} className="flex items-center gap-2 text-sm cursor-pointer">
+                    <Checkbox
+                      checked={!!perms[k.key]}
+                      onCheckedChange={(v) => setPerms((p) => ({ ...p, [k.key]: v === true }))}
+                    />
+                    <span>{k.label}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+        <DialogFooter>
+          <Button variant="ghost" onClick={onClose}>Cancel</Button>
+          <Button onClick={save} disabled={saving}>
+            {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+            Save permissions
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
