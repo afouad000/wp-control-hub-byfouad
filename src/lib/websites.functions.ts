@@ -1029,8 +1029,30 @@ export const deleteCoupon = createServerFn({ method: "POST" })
 
 const WebsiteIdInput = z.object({ website_id: z.string().uuid() });
 
+const DEFAULT_PERMS: Record<string, boolean> = {
+  view_dashboard: true,
+  view_orders: false, edit_orders: false,
+  view_products: false, edit_products: false,
+  view_customers: false, edit_customers: false,
+  view_coupons: false, manage_coupons: false,
+  view_reports: false,
+  manage_website_settings: false,
+  manage_team: false,
+  view_activity_logs: false,
+};
+
+const ROLE_PRESETS: Record<string, Record<string, boolean>> = {
+  owner: Object.fromEntries(Object.keys(DEFAULT_PERMS).map((k) => [k, true])),
+  admin: { ...DEFAULT_PERMS, view_orders: true, edit_orders: true, view_products: true, edit_products: true, view_customers: true, edit_customers: true, view_coupons: true, manage_coupons: true, view_reports: true, view_activity_logs: true, manage_website_settings: true },
+  editor: { ...DEFAULT_PERMS, view_orders: true, edit_orders: true, view_products: true, edit_products: true, view_coupons: true, manage_coupons: true, view_customers: true },
+  viewer: { ...DEFAULT_PERMS, view_orders: true, view_products: true, view_customers: true, view_coupons: true, view_reports: true },
+};
+
 type MemberRow = {
-  id: string; user_id: string; permission: string; created_at: string;
+  id: string; user_id: string; permission: string; role: string | null;
+  permissions: Record<string, boolean> | null;
+  invitation_status: string | null;
+  created_at: string;
   email: string | null; full_name: string | null;
 };
 
@@ -1038,19 +1060,17 @@ export const listMembers = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d) => WebsiteIdInput.parse(d))
   .handler(async ({ data, context }): Promise<{ ok: true; members: MemberRow[] } | { ok: false; error: string }> => {
-    // Verify access via RLS.
     const { data: site, error: sErr } = await context.supabase.from("websites").select("id").eq("id", data.website_id).maybeSingle();
     if (sErr) return { ok: false, error: sErr.message };
     if (!site) return { ok: false, error: "Not found or access denied" };
 
     const { data: members, error } = await context.supabase
       .from("website_members")
-      .select("id, user_id, permission, created_at")
+      .select("id, user_id, permission, role, permissions, invitation_status, created_at")
       .eq("website_id", data.website_id)
       .order("created_at", { ascending: true });
     if (error) return { ok: false, error: error.message };
 
-    // Resolve profile info via admin client (members may not be in the same RLS scope).
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
     const ids = (members ?? []).map((m) => m.user_id);
     const { data: profs } = ids.length
@@ -1060,7 +1080,7 @@ export const listMembers = createServerFn({ method: "GET" })
     return {
       ok: true,
       members: (members ?? []).map((m) => ({
-        ...m,
+        ...(m as MemberRow),
         email: map.get(m.user_id)?.email ?? null,
         full_name: map.get(m.user_id)?.full_name ?? null,
       })),
@@ -1070,24 +1090,27 @@ export const listMembers = createServerFn({ method: "GET" })
 const InviteInput = z.object({
   website_id: z.string().uuid(),
   email: z.string().trim().email().max(320),
-  permission: z.enum(["view", "edit", "owner"]).default("view"),
+  role: z.enum(["admin", "editor", "viewer"]).default("viewer"),
 });
 
 export const inviteMember = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d) => InviteInput.parse(d))
   .handler(async ({ data, context }) => {
-    // Verify owner via RLS: only owners can write website_members rows.
-    const { data: owned } = await context.supabase.from("websites").select("id, owner_id").eq("id", data.website_id).maybeSingle();
-    if (!owned || owned.owner_id !== context.userId) throw new Error("Only the website owner can manage members.");
+    await requirePermission(context, data.website_id, "manage_team");
 
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
     const { data: prof, error } = await supabaseAdmin.from("profiles").select("id, email").eq("email", data.email.toLowerCase()).maybeSingle();
     if (error) throw new Error(error.message);
     if (!prof) throw new Error("No registered user with that email yet. Ask them to sign up first.");
 
+    const perms = ROLE_PRESETS[data.role] ?? ROLE_PRESETS.viewer;
+    const legacyPermission = data.role === "admin" ? "edit" : data.role === "editor" ? "edit" : "view";
     const { error: insErr } = await context.supabase.from("website_members").insert({
-      website_id: data.website_id, user_id: prof.id, permission: data.permission,
+      website_id: data.website_id, user_id: prof.id,
+      permission: legacyPermission, role: data.role,
+      permissions: perms, invitation_status: "accepted",
+      accepted_at: new Date().toISOString(),
     });
     if (insErr) {
       if (/duplicate|unique/i.test(insErr.message)) throw new Error("This user is already a member.");
@@ -1095,7 +1118,9 @@ export const inviteMember = createServerFn({ method: "POST" })
     }
     await context.supabase.from("audit_logs").insert({
       user_id: context.userId, website_id: data.website_id,
-      action: "website.member_added", details: { member_user_id: prof.id, permission: data.permission, email: data.email },
+      action: "website.member_added",
+      entity_type: "member", entity_id: prof.id,
+      new_value: { role: data.role, permissions: perms, email: data.email },
     });
     return { ok: true };
   });
@@ -1103,20 +1128,38 @@ export const inviteMember = createServerFn({ method: "POST" })
 const MemberUpdate = z.object({
   website_id: z.string().uuid(),
   member_id: z.string().uuid(),
-  permission: z.enum(["view", "edit", "owner"]),
+  role: z.enum(["admin", "editor", "viewer", "owner"]).optional(),
+  permissions: z.record(z.string(), z.boolean()).optional(),
 });
 
 export const updateMember = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d) => MemberUpdate.parse(d))
   .handler(async ({ data, context }) => {
+    await requirePermission(context, data.website_id, "manage_team");
+
+    const patch: Record<string, unknown> = {};
+    if (data.role) {
+      patch.role = data.role;
+      patch.permission = data.role === "viewer" ? "view" : data.role === "owner" ? "owner" : "edit";
+      if (!data.permissions) patch.permissions = ROLE_PRESETS[data.role] ?? ROLE_PRESETS.viewer;
+    }
+    if (data.permissions) patch.permissions = data.permissions;
+
+    const { data: before } = await context.supabase
+      .from("website_members").select("role, permissions")
+      .eq("id", data.member_id).eq("website_id", data.website_id).maybeSingle();
+
     const { error } = await context.supabase
-      .from("website_members").update({ permission: data.permission })
+      .from("website_members").update(patch)
       .eq("id", data.member_id).eq("website_id", data.website_id);
-    if (error) throw new Error(error.message);
+    if (error) throw new Error(friendlyDbError(error, "Could not update member."));
+
     await context.supabase.from("audit_logs").insert({
       user_id: context.userId, website_id: data.website_id,
-      action: "website.member_updated", details: { member_id: data.member_id, permission: data.permission },
+      action: "website.member_updated",
+      entity_type: "member", entity_id: data.member_id,
+      old_value: before ?? null, new_value: patch,
     });
     return { ok: true };
   });
@@ -1127,13 +1170,22 @@ export const removeMember = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d) => MemberRemove.parse(d))
   .handler(async ({ data, context }) => {
+    await requirePermission(context, data.website_id, "manage_team");
+    const { data: before } = await context.supabase
+      .from("website_members").select("user_id, role, permissions")
+      .eq("id", data.member_id).eq("website_id", data.website_id).maybeSingle();
+    if (before && (before as { role?: string }).role === "owner") {
+      throw new Error("The owner cannot be removed.");
+    }
     const { error } = await context.supabase
       .from("website_members").delete()
       .eq("id", data.member_id).eq("website_id", data.website_id);
     if (error) throw new Error(error.message);
     await context.supabase.from("audit_logs").insert({
       user_id: context.userId, website_id: data.website_id,
-      action: "website.member_removed", details: { member_id: data.member_id },
+      action: "website.member_removed",
+      entity_type: "member", entity_id: data.member_id,
+      old_value: before ?? null,
     });
     return { ok: true };
   });
