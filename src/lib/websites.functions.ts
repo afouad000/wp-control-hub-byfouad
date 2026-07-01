@@ -281,7 +281,7 @@ export const refreshWebsite = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d) => IdInput.parse(d))
   .handler(async ({ data, context }) => {
-    const c = await getCreds(context, data.id);
+    const c = await getCreds(context, data.id, "manage_website_settings");
     const probe = await probeSite(c.url, c.wp_username ?? "", c.wp_app_password ?? "", c.wc_consumer_key, c.wc_consumer_secret);
     await context.supabase
       .from("websites")
@@ -441,7 +441,7 @@ export const fetchPosts = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d) => SiteScoped.parse(d))
   .handler(async ({ data, context }) => {
-    const c = await getCreds(context, data.website_id);
+    const c = await getCreds(context, data.website_id, "view_dashboard");
     try {
       const res = await fetch(`${c.url.replace(/\/$/, "")}/wp-json/wp/v2/posts?per_page=20&_embed`, {
         headers: { Authorization: wpAuthHeader(c) },
@@ -479,7 +479,7 @@ export const fetchProducts = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d) => ProductsInput.parse(d))
   .handler(async ({ data, context }) => {
-    const c = await getCreds(context, data.website_id);
+    const c = await getCreds(context, data.website_id, "view_products");
     if (!c.wc_consumer_key || !c.wc_consumer_secret) {
       return { ok: false as const, error: "WooCommerce keys missing", products: [] as WCProduct[], paging: { total: 0, totalPages: 0, page: 1, perPage: data.per_page } };
     }
@@ -523,7 +523,7 @@ export const updateProduct = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d) => UpdateProductInput.parse(d))
   .handler(async ({ data, context }) => {
-    const c = await getCreds(context, data.website_id);
+    const c = await getCreds(context, data.website_id, "edit_products");
     if (!c.wc_consumer_key || !c.wc_consumer_secret) throw new Error("WooCommerce keys missing");
     const { website_id, product_id, ...patch } = data;
     const body: Record<string, unknown> = {};
@@ -574,7 +574,7 @@ export const fetchVariations = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d) => VariationsInput.parse(d))
   .handler(async ({ data, context }) => {
-    const c = await getCreds(context, data.website_id);
+    const c = await getCreds(context, data.website_id, "view_products");
     if (!c.wc_consumer_key || !c.wc_consumer_secret) {
       return { ok: false as const, error: "WooCommerce keys missing", variations: [] as WCVariation[], paging: { total: 0, totalPages: 0, page: 1, perPage: data.per_page } };
     }
@@ -613,7 +613,7 @@ export const updateVariation = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d) => UpdateVariationInput.parse(d))
   .handler(async ({ data, context }) => {
-    const c = await getCreds(context, data.website_id);
+    const c = await getCreds(context, data.website_id, "edit_products");
     if (!c.wc_consumer_key || !c.wc_consumer_secret) throw new Error("WooCommerce keys missing");
     const { website_id, product_id, variation_id, ...patch } = data;
     const body: Record<string, unknown> = {};
@@ -664,7 +664,7 @@ export const fetchOrders = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d) => OrdersInput.parse(d))
   .handler(async ({ data, context }) => {
-    const c = await getCreds(context, data.website_id);
+    const c = await getCreds(context, data.website_id, "view_orders");
     if (!c.wc_consumer_key || !c.wc_consumer_secret) {
       return { ok: false as const, error: "WooCommerce keys missing", orders: [] as WCOrder[], paging: { total: 0, totalPages: 0, page: 1, perPage: data.per_page } };
     }
@@ -705,7 +705,7 @@ export const updateOrderStatus = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d) => UpdateOrderInput.parse(d))
   .handler(async ({ data, context }) => {
-    const c = await getCreds(context, data.website_id);
+    const c = await getCreds(context, data.website_id, "edit_orders");
     if (!c.wc_consumer_key || !c.wc_consumer_secret) throw new Error("WooCommerce keys missing");
     const res = await fetch(`${c.url.replace(/\/$/, "")}/wp-json/wc/v3/orders/${data.order_id}`, {
       method: "PUT",
@@ -741,7 +741,7 @@ export const fetchCustomers = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d) => CustomersInput.parse(d))
   .handler(async ({ data, context }) => {
-    const c = await getCreds(context, data.website_id);
+    const c = await getCreds(context, data.website_id, "view_customers");
     if (!c.wc_consumer_key || !c.wc_consumer_secret) {
       return { ok: false as const, error: "WooCommerce keys missing", customers: [] as WCCustomer[], paging: { total: 0, totalPages: 0, page: 1, perPage: data.per_page } };
     }
@@ -776,7 +776,7 @@ export const fetchOrder = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d) => OrderIdInput.parse(d))
   .handler(async ({ data, context }) => {
-    const c = await getCreds(context, data.website_id);
+    const c = await getCreds(context, data.website_id, "view_orders");
     if (!c.wc_consumer_key || !c.wc_consumer_secret) return { ok: false as const, error: "WooCommerce keys missing" };
     try {
       const [orderRes, notesRes] = await Promise.all([
@@ -801,7 +801,7 @@ export const addOrderNote = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d) => AddNoteInput.parse(d))
   .handler(async ({ data, context }) => {
-    const c = await getCreds(context, data.website_id);
+    const c = await getCreds(context, data.website_id, "edit_orders");
     if (!c.wc_consumer_key || !c.wc_consumer_secret) throw new Error("WooCommerce keys missing");
     const res = await fetch(`${c.url.replace(/\/$/, "")}/wp-json/wc/v3/orders/${data.order_id}/notes`, {
       method: "POST",
@@ -825,7 +825,7 @@ export const refundOrder = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d) => RefundInput.parse(d))
   .handler(async ({ data, context }) => {
-    const c = await getCreds(context, data.website_id);
+    const c = await getCreds(context, data.website_id, "edit_orders");
     if (!c.wc_consumer_key || !c.wc_consumer_secret) throw new Error("WooCommerce keys missing");
     const res = await fetch(`${c.url.replace(/\/$/, "")}/wp-json/wc/v3/orders/${data.order_id}/refunds`, {
       method: "POST",
@@ -863,7 +863,7 @@ export const createProduct = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d) => CreateProductInput.parse(d))
   .handler(async ({ data, context }) => {
-    const c = await getCreds(context, data.website_id);
+    const c = await getCreds(context, data.website_id, "edit_products");
     if (!c.wc_consumer_key || !c.wc_consumer_secret) throw new Error("WooCommerce keys missing");
     const { website_id, ...rest } = data;
     const body: Record<string, unknown> = {};
@@ -896,7 +896,7 @@ export const deleteProduct = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d) => DeleteProductInput.parse(d))
   .handler(async ({ data, context }) => {
-    const c = await getCreds(context, data.website_id);
+    const c = await getCreds(context, data.website_id, "edit_products");
     if (!c.wc_consumer_key || !c.wc_consumer_secret) throw new Error("WooCommerce keys missing");
     const res = await fetch(
       `${c.url.replace(/\/$/, "")}/wp-json/wc/v3/products/${data.product_id}?force=${data.force ? "true" : "false"}`,
@@ -929,7 +929,7 @@ export const fetchCoupons = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d) => CouponsListInput.parse(d))
   .handler(async ({ data, context }) => {
-    const c = await getCreds(context, data.website_id);
+    const c = await getCreds(context, data.website_id, "view_coupons");
     if (!c.wc_consumer_key || !c.wc_consumer_secret) {
       return { ok: false as const, error: "WooCommerce keys missing", coupons: [] as WCCoupon[], paging: { total: 0, totalPages: 0, page: 1, perPage: data.per_page } };
     }
@@ -964,7 +964,7 @@ export const saveCoupon = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d) => CouponInput.parse(d))
   .handler(async ({ data, context }) => {
-    const c = await getCreds(context, data.website_id);
+    const c = await getCreds(context, data.website_id, "manage_coupons");
     if (!c.wc_consumer_key || !c.wc_consumer_secret) throw new Error("WooCommerce keys missing");
     const { website_id, id, ...rest } = data;
     const body: Record<string, unknown> = {};
@@ -996,7 +996,7 @@ export const deleteCoupon = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d) => DeleteCouponInput.parse(d))
   .handler(async ({ data, context }) => {
-    const c = await getCreds(context, data.website_id);
+    const c = await getCreds(context, data.website_id, "manage_coupons");
     if (!c.wc_consumer_key || !c.wc_consumer_secret) throw new Error("WooCommerce keys missing");
     const res = await fetch(
       `${c.url.replace(/\/$/, "")}/wp-json/wc/v3/coupons/${data.id}?force=true`,
