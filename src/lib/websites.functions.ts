@@ -1151,7 +1151,8 @@ export const updateMember = createServerFn({ method: "POST" })
       .eq("id", data.member_id).eq("website_id", data.website_id).maybeSingle();
 
     const { error } = await context.supabase
-      .from("website_members").update(patch)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      .from("website_members").update(patch as any)
       .eq("id", data.member_id).eq("website_id", data.website_id);
     if (error) throw new Error(friendlyDbError(error, "Could not update member."));
 
@@ -1159,7 +1160,8 @@ export const updateMember = createServerFn({ method: "POST" })
       user_id: context.userId, website_id: data.website_id,
       action: "website.member_updated",
       entity_type: "member", entity_id: data.member_id,
-      old_value: before ?? null, new_value: patch,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      old_value: (before ?? null) as any, new_value: patch as any,
     });
     return { ok: true };
   });
