@@ -296,16 +296,29 @@ export const refreshWebsite = createServerFn({ method: "POST" })
     return probe;
   });
 
+const AuditLogsInput = z.object({
+  website_id: z.string().uuid().optional(),
+  limit: z.number().int().min(1).max(500).default(200),
+}).optional();
+
 export const listAuditLogs = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
-  .handler(async ({ context }) => {
-    const { data, error } = await context.supabase
+  .inputValidator((d) => AuditLogsInput.parse(d) ?? { limit: 200 })
+  .handler(async ({ data, context }) => {
+    // If scoped to a website, require view_activity_logs. Otherwise RLS on
+    // audit_logs will already filter to sites the user can see.
+    if (data?.website_id) {
+      await requirePermission(context, data.website_id, "view_activity_logs");
+    }
+    let q = context.supabase
       .from("audit_logs")
-      .select("id, action, details, website_id, user_id, created_at")
+      .select("id, action, details, website_id, user_id, entity_type, entity_id, old_value, new_value, status, created_at")
       .order("created_at", { ascending: false })
-      .limit(200);
+      .limit(data?.limit ?? 200);
+    if (data?.website_id) q = q.eq("website_id", data.website_id);
+    const { data: rows, error } = await q;
     if (error) throw new Error(error.message);
-    return data ?? [];
+    return rows ?? [];
   });
 
 // ---------- WordPress / WooCommerce probes ----------
