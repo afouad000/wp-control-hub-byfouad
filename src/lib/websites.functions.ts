@@ -1,7 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
-import { assertAuthenticatedContext, friendlyDbError } from "./server-guards";
+import { assertAuthenticatedContext, friendlyDbError, requirePermission, type Permission } from "./server-guards";
 
 const PUBLIC_COLUMNS =
   "id, owner_id, name, url, client_name, logo_url, status, connection_status, last_checked_at, last_error, meta, created_at, updated_at";
@@ -411,15 +411,9 @@ type Creds = {
 };
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function getCreds(context: any, websiteId: string): Promise<Creds> {
-  // 1) Verify access via user-scoped client (RLS).
-  const { data: site, error } = await context.supabase
-    .from("websites")
-    .select("id")
-    .eq("id", websiteId)
-    .maybeSingle();
-  if (error) throw new Error(error.message);
-  if (!site) throw new Error("Website not found or access denied.");
+async function getCreds(context: any, websiteId: string, permission: Permission): Promise<Creds> {
+  // 1) Verify access + specific module permission via SECURITY DEFINER RPC.
+  await requirePermission(context, websiteId, permission);
 
   // 2) Read raw credentials via service-role RPC against the private schema.
   const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
