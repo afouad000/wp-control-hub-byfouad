@@ -2,13 +2,34 @@ import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { assertAuthenticatedContext, friendlyDbError, requirePermission, type Permission } from "./server-guards";
+import { safeFetch, assertSafeUrl, SafeFetchAbortError, safeFetchErrorMessage } from "./safe-fetch";
 
 const PUBLIC_COLUMNS =
   "id, owner_id, name, url, client_name, logo_url, status, connection_status, last_checked_at, last_error, meta, created_at, updated_at";
 
+/**
+ * Zod refinement: URL must pass SSRF validation (public http/https origin).
+ * Applied to every field the server later dereferences.
+ */
+const siteUrl = z
+  .string()
+  .trim()
+  .url()
+  .max(2048)
+  .superRefine((val, ctx) => {
+    try {
+      assertSafeUrl(val);
+    } catch (e) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: e instanceof SafeFetchAbortError ? e.message : "URL is not allowed.",
+      });
+    }
+  });
+
 const ConnectInput = z.object({
   name: z.string().trim().min(1).max(120),
-  url: z.string().trim().url().max(2048),
+  url: siteUrl,
   client_name: z.string().trim().max(120).optional().nullable(),
   logo_url: z.string().trim().url().max(2048).optional().nullable(),
   wp_username: z.string().trim().min(1).max(120),
@@ -18,7 +39,7 @@ const ConnectInput = z.object({
 });
 
 const TestInput = z.object({
-  url: z.string().trim().url().max(2048),
+  url: siteUrl,
   wp_username: z.string().trim().min(1).max(120),
   wp_app_password: z.string().trim().min(1).max(512),
   wc_consumer_key: z.string().trim().max(512).optional().nullable(),
@@ -26,6 +47,7 @@ const TestInput = z.object({
 });
 
 const ReconnectInput = TestInput.extend({ id: z.string().uuid() });
+
 
 const UpdateInput = z.object({
   id: z.string().uuid(),
