@@ -349,7 +349,7 @@ async function probeSite(
   const wpAuth = "Basic " + btoa(`${user}:${pass}`);
   const info: Probe["info"] = {};
   try {
-    const root = await fetch(`${base}/wp-json/`, { headers: { Authorization: wpAuth } });
+    const root = await safeFetch(`${base}/wp-json/`, { headers: { Authorization: wpAuth } });
     if (!root.ok) {
       const body = await root.text().catch(() => "");
       const hint =
@@ -363,13 +363,13 @@ async function probeSite(
     const rootJson = (await root.json()) as { description?: string; namespaces?: string[] };
     info.woocommerce = (rootJson.namespaces ?? []).includes("wc/v3");
 
-    const plugins = await fetch(`${base}/wp-json/wp/v2/plugins`, { headers: { Authorization: wpAuth } });
+    const plugins = await safeFetch(`${base}/wp-json/wp/v2/plugins`, { headers: { Authorization: wpAuth } });
     if (plugins.ok) {
       const pj = (await plugins.json()) as unknown[];
       info.plugins_count = Array.isArray(pj) ? pj.length : undefined;
     }
 
-    const themes = await fetch(`${base}/wp-json/wp/v2/themes?status=active`, { headers: { Authorization: wpAuth } });
+    const themes = await safeFetch(`${base}/wp-json/wp/v2/themes?status=active`, { headers: { Authorization: wpAuth } });
     if (themes.ok) {
       const tj = (await themes.json()) as Array<{ name?: { raw?: string } | string }>;
       const first = tj[0];
@@ -379,22 +379,22 @@ async function probeSite(
 
     if (info.woocommerce && ck && cs) {
       const wcAuth = "Basic " + btoa(`${ck}:${cs}`);
-      const sanity = await fetch(`${base}/wp-json/wc/v3/system_status?_fields=settings`, {
+      const sanity = await safeFetch(`${base}/wp-json/wc/v3/system_status?_fields=settings`, {
         headers: { Authorization: wcAuth },
       });
       if (sanity.status === 401) {
         return { ok: false, error: "WooCommerce REST keys are invalid. Regenerate Consumer Key/Secret.", info };
       }
       const [orders, products, customers] = await Promise.all([
-        fetch(`${base}/wp-json/wc/v3/orders?per_page=1`, { headers: { Authorization: wcAuth } }),
-        fetch(`${base}/wp-json/wc/v3/products?per_page=1`, { headers: { Authorization: wcAuth } }),
-        fetch(`${base}/wp-json/wc/v3/customers?per_page=1`, { headers: { Authorization: wcAuth } }),
+        safeFetch(`${base}/wp-json/wc/v3/orders?per_page=1`, { headers: { Authorization: wcAuth } }),
+        safeFetch(`${base}/wp-json/wc/v3/products?per_page=1`, { headers: { Authorization: wcAuth } }),
+        safeFetch(`${base}/wp-json/wc/v3/customers?per_page=1`, { headers: { Authorization: wcAuth } }),
       ]);
       info.orders = parseInt(orders.headers.get("x-wp-total") ?? "0", 10) || 0;
       info.products = parseInt(products.headers.get("x-wp-total") ?? "0", 10) || 0;
       info.customers = parseInt(customers.headers.get("x-wp-total") ?? "0", 10) || 0;
 
-      const report = await fetch(`${base}/wp-json/wc/v3/reports/sales`, { headers: { Authorization: wcAuth } });
+      const report = await safeFetch(`${base}/wp-json/wc/v3/reports/sales`, { headers: { Authorization: wcAuth } });
       if (report.ok) {
         const rj = (await report.json()) as Array<{ total_sales?: string }>;
         info.revenue = parseFloat(rj[0]?.total_sales ?? "0") || 0;
@@ -456,7 +456,7 @@ export const fetchPosts = createServerFn({ method: "GET" })
   .handler(async ({ data, context }) => {
     const c = await getCreds(context, data.website_id, "view_dashboard");
     try {
-      const res = await fetch(`${c.url.replace(/\/$/, "")}/wp-json/wp/v2/posts?per_page=20&_embed`, {
+      const res = await safeFetch(`${c.url.replace(/\/$/, "")}/wp-json/wp/v2/posts?per_page=20&_embed`, {
         headers: { Authorization: wpAuthHeader(c) },
       });
       if (!res.ok) return { ok: false as const, error: `HTTP ${res.status}`, posts: [] };
@@ -505,7 +505,7 @@ export const fetchProducts = createServerFn({ method: "GET" })
       if (data.stock_status) params.set("stock_status", data.stock_status);
       if (data.status && data.status !== "any") params.set("status", data.status);
 
-      const res = await fetch(`${c.url.replace(/\/$/, "")}/wp-json/wc/v3/products?${params}`, {
+      const res = await safeFetch(`${c.url.replace(/\/$/, "")}/wp-json/wc/v3/products?${params}`, {
         headers: { Authorization: wcAuthHeader(c) },
       });
       if (!res.ok) {
@@ -544,7 +544,7 @@ export const updateProduct = createServerFn({ method: "POST" })
     if (body.stock_quantity !== undefined && body.stock_quantity !== null) {
       body.manage_stock = true;
     }
-    const res = await fetch(`${c.url.replace(/\/$/, "")}/wp-json/wc/v3/products/${product_id}`, {
+    const res = await safeFetch(`${c.url.replace(/\/$/, "")}/wp-json/wc/v3/products/${product_id}`, {
       method: "PUT",
       headers: { Authorization: wcAuthHeader(c), "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -593,7 +593,7 @@ export const fetchVariations = createServerFn({ method: "GET" })
     }
     try {
       const params = new URLSearchParams({ page: String(data.page), per_page: String(data.per_page) });
-      const res = await fetch(
+      const res = await safeFetch(
         `${c.url.replace(/\/$/, "")}/wp-json/wc/v3/products/${data.product_id}/variations?${params}`,
         { headers: { Authorization: wcAuthHeader(c) } },
       );
@@ -634,7 +634,7 @@ export const updateVariation = createServerFn({ method: "POST" })
     if (body.stock_quantity !== undefined && body.stock_quantity !== null) {
       body.manage_stock = true;
     }
-    const res = await fetch(
+    const res = await safeFetch(
       `${c.url.replace(/\/$/, "")}/wp-json/wc/v3/products/${product_id}/variations/${variation_id}`,
       {
         method: "PUT",
@@ -691,7 +691,7 @@ export const fetchOrders = createServerFn({ method: "GET" })
       if (data.after) params.set("after", data.after);
       if (data.before) params.set("before", data.before);
 
-      const res = await fetch(`${c.url.replace(/\/$/, "")}/wp-json/wc/v3/orders?${params}`, {
+      const res = await safeFetch(`${c.url.replace(/\/$/, "")}/wp-json/wc/v3/orders?${params}`, {
         headers: { Authorization: wcAuthHeader(c) },
       });
       if (!res.ok) {
@@ -720,7 +720,7 @@ export const updateOrderStatus = createServerFn({ method: "POST" })
   .handler(async ({ data, context }) => {
     const c = await getCreds(context, data.website_id, "edit_orders");
     if (!c.wc_consumer_key || !c.wc_consumer_secret) throw new Error("WooCommerce keys missing");
-    const res = await fetch(`${c.url.replace(/\/$/, "")}/wp-json/wc/v3/orders/${data.order_id}`, {
+    const res = await safeFetch(`${c.url.replace(/\/$/, "")}/wp-json/wc/v3/orders/${data.order_id}`, {
       method: "PUT",
       headers: { Authorization: wcAuthHeader(c), "Content-Type": "application/json" },
       body: JSON.stringify({ status: data.status }),
@@ -764,7 +764,7 @@ export const fetchCustomers = createServerFn({ method: "GET" })
         per_page: String(data.per_page),
       });
       if (data.search) params.set("search", data.search);
-      const res = await fetch(`${c.url.replace(/\/$/, "")}/wp-json/wc/v3/customers?${params}`, {
+      const res = await safeFetch(`${c.url.replace(/\/$/, "")}/wp-json/wc/v3/customers?${params}`, {
         headers: { Authorization: wcAuthHeader(c) },
       });
       if (!res.ok) {
@@ -793,8 +793,8 @@ export const fetchOrder = createServerFn({ method: "GET" })
     if (!c.wc_consumer_key || !c.wc_consumer_secret) return { ok: false as const, error: "WooCommerce keys missing" };
     try {
       const [orderRes, notesRes] = await Promise.all([
-        fetch(`${c.url.replace(/\/$/, "")}/wp-json/wc/v3/orders/${data.order_id}`, { headers: { Authorization: wcAuthHeader(c) } }),
-        fetch(`${c.url.replace(/\/$/, "")}/wp-json/wc/v3/orders/${data.order_id}/notes`, { headers: { Authorization: wcAuthHeader(c) } }),
+        safeFetch(`${c.url.replace(/\/$/, "")}/wp-json/wc/v3/orders/${data.order_id}`, { headers: { Authorization: wcAuthHeader(c) } }),
+        safeFetch(`${c.url.replace(/\/$/, "")}/wp-json/wc/v3/orders/${data.order_id}/notes`, { headers: { Authorization: wcAuthHeader(c) } }),
       ]);
       if (!orderRes.ok) return { ok: false as const, error: `HTTP ${orderRes.status}` };
       const order = await orderRes.json();
@@ -816,7 +816,7 @@ export const addOrderNote = createServerFn({ method: "POST" })
   .handler(async ({ data, context }) => {
     const c = await getCreds(context, data.website_id, "edit_orders");
     if (!c.wc_consumer_key || !c.wc_consumer_secret) throw new Error("WooCommerce keys missing");
-    const res = await fetch(`${c.url.replace(/\/$/, "")}/wp-json/wc/v3/orders/${data.order_id}/notes`, {
+    const res = await safeFetch(`${c.url.replace(/\/$/, "")}/wp-json/wc/v3/orders/${data.order_id}/notes`, {
       method: "POST",
       headers: { Authorization: wcAuthHeader(c), "Content-Type": "application/json" },
       body: JSON.stringify({ note: data.note, customer_note: data.customer_note }),
@@ -840,7 +840,7 @@ export const refundOrder = createServerFn({ method: "POST" })
   .handler(async ({ data, context }) => {
     const c = await getCreds(context, data.website_id, "edit_orders");
     if (!c.wc_consumer_key || !c.wc_consumer_secret) throw new Error("WooCommerce keys missing");
-    const res = await fetch(`${c.url.replace(/\/$/, "")}/wp-json/wc/v3/orders/${data.order_id}/refunds`, {
+    const res = await safeFetch(`${c.url.replace(/\/$/, "")}/wp-json/wc/v3/orders/${data.order_id}/refunds`, {
       method: "POST",
       headers: { Authorization: wcAuthHeader(c), "Content-Type": "application/json" },
       body: JSON.stringify({ amount: data.amount, reason: data.reason ?? "" }),
@@ -882,7 +882,7 @@ export const createProduct = createServerFn({ method: "POST" })
     const body: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(rest)) if (v !== undefined && v !== "") body[k] = v;
     if (body.stock_quantity !== undefined && body.stock_quantity !== null) body.manage_stock = true;
-    const res = await fetch(`${c.url.replace(/\/$/, "")}/wp-json/wc/v3/products`, {
+    const res = await safeFetch(`${c.url.replace(/\/$/, "")}/wp-json/wc/v3/products`, {
       method: "POST",
       headers: { Authorization: wcAuthHeader(c), "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -911,7 +911,7 @@ export const deleteProduct = createServerFn({ method: "POST" })
   .handler(async ({ data, context }) => {
     const c = await getCreds(context, data.website_id, "edit_products");
     if (!c.wc_consumer_key || !c.wc_consumer_secret) throw new Error("WooCommerce keys missing");
-    const res = await fetch(
+    const res = await safeFetch(
       `${c.url.replace(/\/$/, "")}/wp-json/wc/v3/products/${data.product_id}?force=${data.force ? "true" : "false"}`,
       { method: "DELETE", headers: { Authorization: wcAuthHeader(c) } },
     );
@@ -949,7 +949,7 @@ export const fetchCoupons = createServerFn({ method: "GET" })
     try {
       const params = new URLSearchParams({ page: String(data.page), per_page: String(data.per_page) });
       if (data.search) params.set("search", data.search);
-      const res = await fetch(`${c.url.replace(/\/$/, "")}/wp-json/wc/v3/coupons?${params}`, { headers: { Authorization: wcAuthHeader(c) } });
+      const res = await safeFetch(`${c.url.replace(/\/$/, "")}/wp-json/wc/v3/coupons?${params}`, { headers: { Authorization: wcAuthHeader(c) } });
       if (!res.ok) {
         const text = await res.text().catch(() => "");
         return { ok: false as const, error: `HTTP ${res.status} ${text.slice(0, 160)}`, coupons: [] as WCCoupon[], paging: { total: 0, totalPages: 0, page: data.page, perPage: data.per_page } };
@@ -985,7 +985,7 @@ export const saveCoupon = createServerFn({ method: "POST" })
     const url = id
       ? `${c.url.replace(/\/$/, "")}/wp-json/wc/v3/coupons/${id}`
       : `${c.url.replace(/\/$/, "")}/wp-json/wc/v3/coupons`;
-    const res = await fetch(url, {
+    const res = await safeFetch(url, {
       method: id ? "PUT" : "POST",
       headers: { Authorization: wcAuthHeader(c), "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -1011,7 +1011,7 @@ export const deleteCoupon = createServerFn({ method: "POST" })
   .handler(async ({ data, context }) => {
     const c = await getCreds(context, data.website_id, "manage_coupons");
     if (!c.wc_consumer_key || !c.wc_consumer_secret) throw new Error("WooCommerce keys missing");
-    const res = await fetch(
+    const res = await safeFetch(
       `${c.url.replace(/\/$/, "")}/wp-json/wc/v3/coupons/${data.id}?force=true`,
       { method: "DELETE", headers: { Authorization: wcAuthHeader(c) } },
     );
