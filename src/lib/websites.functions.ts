@@ -458,8 +458,12 @@ async function getCreds(context: any, websiteId: string, permission: Permission)
   if (e2) throw new Error(e2.message);
   const row = Array.isArray(rows) ? rows[0] : rows;
   if (!row) throw new Error("Credentials unavailable.");
+  // Defence-in-depth: re-validate the stored URL every time before we
+  // dereference it, in case a row was tampered with post-connect.
+  assertSafeUrl((row as Creds).url);
   return row as Creds;
 }
+
 
 const wpAuthHeader = (c: Creds) =>
   "Basic " + btoa(`${c.wp_username ?? ""}:${c.wp_app_password ?? ""}`);
