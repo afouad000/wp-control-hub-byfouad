@@ -1,3 +1,4 @@
+import { RequirePermission } from "@/components/require-permission";
 import { createFileRoute } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
@@ -21,7 +22,7 @@ import { toast } from "sonner";
 
 export const Route = createFileRoute("/_authenticated/orders")({
   head: () => ({ meta: [{ title: "Orders — WP Control Hub" }] }),
-  component: OrdersPage,
+  component: () => (<RequirePermission permission="view_orders"><OrdersPage /></RequirePermission>),
 });
 
 const STATUSES = ["pending", "processing", "on-hold", "completed", "cancelled", "refunded", "failed"] as const;

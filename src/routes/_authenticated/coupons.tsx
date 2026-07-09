@@ -1,3 +1,4 @@
+import { RequirePermission } from "@/components/require-permission";
 import { createFileRoute } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
@@ -18,7 +19,7 @@ import { toast } from "sonner";
 
 export const Route = createFileRoute("/_authenticated/coupons")({
   head: () => ({ meta: [{ title: "Coupons — WP Control Hub" }] }),
-  component: CouponsPage,
+  component: () => (<RequirePermission permission="view_coupons"><CouponsPage /></RequirePermission>),
 });
 
 type Coupon = {
