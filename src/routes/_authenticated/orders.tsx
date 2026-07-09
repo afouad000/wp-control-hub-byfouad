@@ -1,3 +1,4 @@
+import { sanitizedHtmlProps } from "@/lib/sanitize";
 import { RequirePermission } from "@/components/require-permission";
 import { createFileRoute } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -307,7 +308,7 @@ function OrderDetailDialog({ websiteId, orderId, onClose }: { websiteId: string;
                           <span className="font-medium">{n.author} {n.customer_note ? <Badge variant="secondary" className="ml-1 text-[10px]">to customer</Badge> : null}</span>
                           <span className="text-muted-foreground">{new Date(n.date_created).toLocaleString()}</span>
                         </div>
-                        <div className="mt-1 whitespace-pre-wrap" dangerouslySetInnerHTML={{ __html: n.note }} />
+                        <div className="mt-1 whitespace-pre-wrap" {...sanitizedHtmlProps(n.note)} />
                       </div>
                     ))}
                 </div>

@@ -1,3 +1,4 @@
+import { sanitizedHtmlProps } from "@/lib/sanitize";
 import { createFileRoute, Link, useParams, useNavigate } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
@@ -239,7 +240,7 @@ function PostsPanel({ websiteId }: { websiteId: string }) {
             <TableBody>
               {data.posts.map((p) => (
                 <TableRow key={p.id}>
-                  <TableCell className="font-medium" dangerouslySetInnerHTML={{ __html: p.title.rendered }} />
+                  <TableCell className="font-medium" {...sanitizedHtmlProps(p.title.rendered)} />
                   <TableCell><Badge variant="outline">{p.status}</Badge></TableCell>
                   <TableCell className="text-muted-foreground text-xs">{new Date(p.date).toLocaleDateString()}</TableCell>
                 </TableRow>
