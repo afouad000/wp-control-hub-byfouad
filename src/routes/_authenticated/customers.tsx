@@ -1,3 +1,4 @@
+import { RequirePermission } from "@/components/require-permission";
 import { createFileRoute } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
@@ -13,7 +14,7 @@ import { listWebsites, fetchCustomers } from "@/lib/websites.functions";
 
 export const Route = createFileRoute("/_authenticated/customers")({
   head: () => ({ meta: [{ title: "Customers — WP Control Hub" }] }),
-  component: CustomersPage,
+  component: () => (<RequirePermission permission="view_customers"><CustomersPage /></RequirePermission>),
 });
 
 function CustomersPage() {

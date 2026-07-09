@@ -1,3 +1,4 @@
+import { RequirePermission } from "@/components/require-permission";
 import { createFileRoute } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
@@ -22,7 +23,7 @@ import { toast } from "sonner";
 
 export const Route = createFileRoute("/_authenticated/products")({
   head: () => ({ meta: [{ title: "Products — WP Control Hub" }] }),
-  component: ProductsPage,
+  component: () => (<RequirePermission permission="view_products"><ProductsPage /></RequirePermission>),
 });
 
 type Product = {

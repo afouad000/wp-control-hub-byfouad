@@ -1,3 +1,4 @@
+import { RequirePermission } from "@/components/require-permission";
 import { createFileRoute } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
@@ -14,7 +15,7 @@ import { listAuditLogs, listWebsites } from "@/lib/websites.functions";
 
 export const Route = createFileRoute("/_authenticated/activity")({
   head: () => ({ meta: [{ title: "Activity — WP Control Hub" }] }),
-  component: ActivityPage,
+  component: () => (<RequirePermission permission="view_activity_logs"><ActivityPage /></RequirePermission>),
 });
 
 type Log = {
