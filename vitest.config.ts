@@ -4,9 +4,9 @@ import tsconfigPaths from "vite-tsconfig-paths";
 export default defineConfig({
   plugins: [tsconfigPaths()],
   test: {
-    include: ["tests/**/*.test.ts", "tests/**/*.test.tsx"],
-    // Most tests are pure unit; the RLS integration test hits the network and
-    // is only included when SUPABASE creds + auth are present in env.
+    include: ["tests/unit/**/*.test.ts", "tests/unit/**/*.test.tsx"],
+    // The RLS integration test at tests/rls-website-creation.test.ts is a
+    // standalone script (uses process.exit); run it with `bun run test:rls`.
     environment: "node",
     testTimeout: 20_000,
   },
