@@ -30,3 +30,12 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Environment files — never commit real values. .env.example is tracked.
+.env
+.env.local
+.env.*.local
+.dev.vars
+
+# Test / coverage output
+coverage
