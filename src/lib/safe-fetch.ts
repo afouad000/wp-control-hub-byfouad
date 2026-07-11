@@ -122,11 +122,19 @@ function isBlockedIPv6(host: string): boolean {
   if (/^f[cd][0-9a-f]{2}:/.test(h)) return true;
   // Multicast ff00::/8
   if (/^ff[0-9a-f]{2}:/.test(h)) return true;
-  // IPv4-mapped ::ffff:127.0.0.1 → check embedded v4
-  const mapped = /^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/i.exec(h);
-  if (mapped) {
-    const v4 = ipv4ToInt(mapped[1]);
+  // IPv4-mapped forms: URL normalizes ::ffff:127.0.0.1 into ::ffff:7f00:1
+  // (hex low/high words), so match both dotted and hex representations.
+  const mappedDotted = /^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/i.exec(h);
+  if (mappedDotted) {
+    const v4 = ipv4ToInt(mappedDotted[1]);
     return v4 !== null && isBlockedIPv4(v4);
+  }
+  const mappedHex = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i.exec(h);
+  if (mappedHex) {
+    const hi = parseInt(mappedHex[1], 16);
+    const lo = parseInt(mappedHex[2], 16);
+    const v4 = ((hi << 16) | lo) >>> 0;
+    return isBlockedIPv4(v4);
   }
   return false;
 }
