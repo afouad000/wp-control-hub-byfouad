@@ -12,6 +12,9 @@ import { Loader2 } from "lucide-react";
 
 export const Route = createFileRoute("/auth")({
   ssr: false,
+  validateSearch: (s: Record<string, unknown>) => ({
+    next: typeof s.next === "string" && s.next.startsWith("/") ? s.next : undefined,
+  }),
   head: () => ({
     meta: [
       { title: "Sign in — WP Control Hub" },
@@ -28,6 +31,8 @@ const schema = z.object({
 
 function AuthPage() {
   const navigate = useNavigate();
+  const search = Route.useSearch();
+  const nextPath = search.next ?? "/dashboard";
   const [mode, setMode] = useState<"signin" | "signup">("signin");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -36,9 +41,9 @@ function AuthPage() {
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
-      if (data.session) navigate({ to: "/dashboard", replace: true });
+      if (data.session) navigate({ href: nextPath, replace: true });
     });
-  }, [navigate]);
+  }, [navigate, nextPath]);
 
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -60,11 +65,11 @@ function AuthPage() {
         });
         if (error) throw error;
         toast.success("Account created. You're signed in.");
-        navigate({ to: "/dashboard", replace: true });
+        navigate({ href: nextPath, replace: true });
       } else {
         const { error } = await supabase.auth.signInWithPassword({ email, password });
         if (error) throw error;
-        navigate({ to: "/dashboard", replace: true });
+        navigate({ href: nextPath, replace: true });
       }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Authentication failed");
@@ -84,7 +89,7 @@ function AuthPage() {
       return;
     }
     if (result.redirected) return;
-    navigate({ to: "/dashboard", replace: true });
+    navigate({ href: nextPath, replace: true });
   };
 
   return (

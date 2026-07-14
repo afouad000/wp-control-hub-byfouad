@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as AuthRouteImport } from './routes/auth'
 import { Route as AuthenticatedRouteRouteImport } from './routes/_authenticated/route'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as InviteTokenRouteImport } from './routes/invite.$token'
 import { Route as AuthenticatedUsersRouteImport } from './routes/_authenticated/users'
 import { Route as AuthenticatedStoresRouteImport } from './routes/_authenticated/stores'
 import { Route as AuthenticatedSettingsRouteImport } from './routes/_authenticated/settings'
@@ -37,6 +38,11 @@ const AuthenticatedRouteRoute = AuthenticatedRouteRouteImport.update({
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const InviteTokenRoute = InviteTokenRouteImport.update({
+  id: '/invite/$token',
+  path: '/invite/$token',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AuthenticatedUsersRoute = AuthenticatedUsersRouteImport.update({
@@ -114,6 +120,7 @@ export interface FileRoutesByFullPath {
   '/settings': typeof AuthenticatedSettingsRoute
   '/stores': typeof AuthenticatedStoresRoute
   '/users': typeof AuthenticatedUsersRoute
+  '/invite/$token': typeof InviteTokenRoute
   '/websites/$id': typeof AuthenticatedWebsitesIdRoute
   '/websites/new': typeof AuthenticatedWebsitesNewRoute
   '/websites/': typeof AuthenticatedWebsitesIndexRoute
@@ -130,6 +137,7 @@ export interface FileRoutesByTo {
   '/settings': typeof AuthenticatedSettingsRoute
   '/stores': typeof AuthenticatedStoresRoute
   '/users': typeof AuthenticatedUsersRoute
+  '/invite/$token': typeof InviteTokenRoute
   '/websites/$id': typeof AuthenticatedWebsitesIdRoute
   '/websites/new': typeof AuthenticatedWebsitesNewRoute
   '/websites': typeof AuthenticatedWebsitesIndexRoute
@@ -148,6 +156,7 @@ export interface FileRoutesById {
   '/_authenticated/settings': typeof AuthenticatedSettingsRoute
   '/_authenticated/stores': typeof AuthenticatedStoresRoute
   '/_authenticated/users': typeof AuthenticatedUsersRoute
+  '/invite/$token': typeof InviteTokenRoute
   '/_authenticated/websites/$id': typeof AuthenticatedWebsitesIdRoute
   '/_authenticated/websites/new': typeof AuthenticatedWebsitesNewRoute
   '/_authenticated/websites/': typeof AuthenticatedWebsitesIndexRoute
@@ -166,6 +175,7 @@ export interface FileRouteTypes {
     | '/settings'
     | '/stores'
     | '/users'
+    | '/invite/$token'
     | '/websites/$id'
     | '/websites/new'
     | '/websites/'
@@ -182,6 +192,7 @@ export interface FileRouteTypes {
     | '/settings'
     | '/stores'
     | '/users'
+    | '/invite/$token'
     | '/websites/$id'
     | '/websites/new'
     | '/websites'
@@ -199,6 +210,7 @@ export interface FileRouteTypes {
     | '/_authenticated/settings'
     | '/_authenticated/stores'
     | '/_authenticated/users'
+    | '/invite/$token'
     | '/_authenticated/websites/$id'
     | '/_authenticated/websites/new'
     | '/_authenticated/websites/'
@@ -208,6 +220,7 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AuthenticatedRouteRoute: typeof AuthenticatedRouteRouteWithChildren
   AuthRoute: typeof AuthRoute
+  InviteTokenRoute: typeof InviteTokenRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -231,6 +244,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/invite/$token': {
+      id: '/invite/$token'
+      path: '/invite/$token'
+      fullPath: '/invite/$token'
+      preLoaderRoute: typeof InviteTokenRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/_authenticated/users': {
@@ -357,17 +377,8 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AuthenticatedRouteRoute: AuthenticatedRouteRouteWithChildren,
   AuthRoute: AuthRoute,
+  InviteTokenRoute: InviteTokenRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
   ._addFileTypes<FileRouteTypes>()
-
-import type { getRouter } from './router.tsx'
-import type { startInstance } from './start.ts'
-declare module '@tanstack/react-start' {
-  interface Register {
-    ssr: true
-    router: Awaited<ReturnType<typeof getRouter>>
-    config: Awaited<ReturnType<typeof startInstance.getOptions>>
-  }
-}

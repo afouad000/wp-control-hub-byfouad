@@ -3,7 +3,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { useMemo, useState } from "react";
-import { Loader2, UserPlus, Trash2, Users, Settings2 } from "lucide-react";
+import { Loader2, UserPlus, Trash2, Users, Settings2, Copy, XCircle, Mail } from "lucide-react";
 import { PageHeader, EmptyState } from "@/components/page-header";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -14,9 +14,13 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import {
   listWebsites, listMembers, inviteMember, updateMember, removeMember,
 } from "@/lib/websites.functions";
+import {
+  listInvitations, createInvitation, revokeInvitation,
+} from "@/lib/invitations.functions";
 import { toast } from "sonner";
 
 export const Route = createFileRoute("/_authenticated/users")({
@@ -81,7 +85,20 @@ function UsersPage() {
               </Button>
             ))}
           </div>
-          {active ? <MembersCard websiteId={active} /> : null}
+          {active ? (
+            <Tabs defaultValue="members" className="w-full">
+              <TabsList>
+                <TabsTrigger value="members">Members</TabsTrigger>
+                <TabsTrigger value="invitations">Invitations</TabsTrigger>
+              </TabsList>
+              <TabsContent value="members" className="mt-4">
+                <MembersCard websiteId={active} />
+              </TabsContent>
+              <TabsContent value="invitations" className="mt-4">
+                <InvitationsCard websiteId={active} />
+              </TabsContent>
+            </Tabs>
+          ) : null}
         </>
       )}
     </div>
@@ -320,5 +337,172 @@ function PermissionsDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+function InvitationsCard({ websiteId }: { websiteId: string }) {
+  const listFn = useServerFn(listInvitations);
+  const createFn = useServerFn(createInvitation);
+  const revokeFn = useServerFn(revokeInvitation);
+  const qc = useQueryClient();
+
+  const [email, setEmail] = useState("");
+  const [role, setRole] = useState<"admin" | "editor" | "viewer">("viewer");
+  const [creating, setCreating] = useState(false);
+  const [lastLink, setLastLink] = useState<string | null>(null);
+
+  const { data, isLoading, refetch } = useQuery({
+    queryKey: ["invitations", websiteId],
+    queryFn: () => listFn({ data: { website_id: websiteId } }),
+  });
+
+  const refresh = () => {
+    refetch();
+    qc.invalidateQueries({ queryKey: ["invitations", websiteId] });
+  };
+
+  const create = async () => {
+    if (!email) return;
+    setCreating(true);
+    try {
+      const res = await createFn({ data: { website_id: websiteId, email, role } });
+      const link = `${window.location.origin}/invite/${res.token}`;
+      setLastLink(link);
+      try { await navigator.clipboard.writeText(link); } catch { /* clipboard blocked */ }
+      toast.success("Invitation created. Link copied to clipboard.");
+      setEmail("");
+      refresh();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to create invitation");
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  const revoke = async (id: string) => {
+    if (!confirm("Revoke this invitation? The link will stop working.")) return;
+    try {
+      await revokeFn({ data: { id } });
+      toast.success("Invitation revoked");
+      refresh();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed");
+    }
+  };
+
+  const copyLink = async (token: string) => {
+    const link = `${window.location.origin}/invite/${token}`;
+    try {
+      await navigator.clipboard.writeText(link);
+      toast.success("Link copied");
+    } catch {
+      toast.error("Could not copy");
+    }
+  };
+
+  const now = Date.now();
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">Pending invitations</CardTitle>
+        <CardDescription>
+          Send a link to a teammate. They accept after signing in with the invited email.
+          Email delivery isn't wired yet — copy and share the link manually.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="grid gap-2 sm:grid-cols-[1fr_140px_auto]">
+          <Input
+            placeholder="teammate@example.com"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+          />
+          <Select value={role} onValueChange={(v) => setRole(v as typeof role)}>
+            <SelectTrigger><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="viewer">Viewer</SelectItem>
+              <SelectItem value="editor">Editor</SelectItem>
+              <SelectItem value="admin">Admin</SelectItem>
+            </SelectContent>
+          </Select>
+          <Button onClick={create} disabled={creating || !email}>
+            {creating ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Mail className="mr-2 h-4 w-4" />}
+            Create invite
+          </Button>
+        </div>
+
+        {lastLink ? (
+          <div className="rounded-md border bg-muted/40 p-3 text-xs">
+            <div className="mb-1 font-medium text-foreground">Invitation link</div>
+            <div className="flex items-center gap-2">
+              <code className="flex-1 truncate rounded bg-background px-2 py-1">{lastLink}</code>
+              <Button size="sm" variant="outline" onClick={() => navigator.clipboard.writeText(lastLink)}>
+                <Copy className="h-3.5 w-3.5" />
+              </Button>
+            </div>
+          </div>
+        ) : null}
+
+        {isLoading ? (
+          <div className="h-24 animate-pulse rounded bg-muted" />
+        ) : !data?.ok ? (
+          <p className="text-sm text-destructive">Failed to load invitations.</p>
+        ) : data.invitations.length === 0 ? (
+          <EmptyState title="No pending invitations" />
+        ) : (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Email</TableHead>
+                <TableHead>Role</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead>Expires</TableHead>
+                <TableHead></TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {data.invitations.map((i) => {
+                const expired = new Date(i.expires_at).getTime() < now;
+                const status = i.accepted_at
+                  ? "Accepted"
+                  : i.revoked_at
+                  ? "Revoked"
+                  : expired
+                  ? "Expired"
+                  : "Pending";
+                const isPending = status === "Pending";
+                return (
+                  <TableRow key={i.id}>
+                    <TableCell className="font-medium">{i.email}</TableCell>
+                    <TableCell className="capitalize">{i.role}</TableCell>
+                    <TableCell>
+                      <Badge variant={isPending ? "default" : "outline"}>{status}</Badge>
+                    </TableCell>
+                    <TableCell className="text-xs text-muted-foreground">
+                      {new Date(i.expires_at).toLocaleDateString()}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <div className="flex justify-end gap-1">
+                        {isPending ? (
+                          <>
+                            <Button size="sm" variant="ghost" onClick={() => copyLink((i as unknown as { token?: string }).token ?? "")} title="Copy link" disabled>
+                              <Copy className="h-3.5 w-3.5" />
+                            </Button>
+                            <Button size="sm" variant="ghost" onClick={() => revoke(i.id)} className="text-destructive" title="Revoke">
+                              <XCircle className="h-3.5 w-3.5" />
+                            </Button>
+                          </>
+                        ) : null}
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+            </TableBody>
+          </Table>
+        )}
+      </CardContent>
+    </Card>
   );
 }

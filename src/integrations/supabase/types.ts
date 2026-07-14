@@ -118,6 +118,62 @@ export type Database = {
         }
         Relationships: []
       }
+      website_invitations: {
+        Row: {
+          accepted_at: string | null
+          accepted_by: string | null
+          created_at: string
+          email: string
+          expires_at: string
+          id: string
+          invited_by: string
+          permissions: Json
+          revoked_at: string | null
+          role: string
+          token: string
+          updated_at: string
+          website_id: string
+        }
+        Insert: {
+          accepted_at?: string | null
+          accepted_by?: string | null
+          created_at?: string
+          email: string
+          expires_at?: string
+          id?: string
+          invited_by: string
+          permissions?: Json
+          revoked_at?: string | null
+          role?: string
+          token: string
+          updated_at?: string
+          website_id: string
+        }
+        Update: {
+          accepted_at?: string | null
+          accepted_by?: string | null
+          created_at?: string
+          email?: string
+          expires_at?: string
+          id?: string
+          invited_by?: string
+          permissions?: Json
+          revoked_at?: string | null
+          role?: string
+          token?: string
+          updated_at?: string
+          website_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "website_invitations_website_id_fkey"
+            columns: ["website_id"]
+            isOneToOne: false
+            referencedRelation: "websites"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       website_members: {
         Row: {
           accepted_at: string | null
@@ -233,9 +289,30 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      accept_invitation: {
+        Args: { _token: string }
+        Returns: {
+          message: string
+          ok: boolean
+          website_id: string
+        }[]
+      }
       can_access_website: {
         Args: { _user: string; _website: string }
         Returns: boolean
+      }
+      get_invitation_by_token: {
+        Args: { _token: string }
+        Returns: {
+          accepted_at: string
+          email: string
+          expires_at: string
+          invited_by_email: string
+          revoked_at: string
+          role: string
+          website_id: string
+          website_name: string
+        }[]
       }
       get_website_credentials_admin: {
         Args: { _website_id: string }
