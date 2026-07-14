@@ -3,7 +3,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { useMemo, useState } from "react";
-import { Loader2, UserPlus, Trash2, Users, Settings2 } from "lucide-react";
+import { Loader2, UserPlus, Trash2, Users, Settings2, Copy, XCircle, Mail } from "lucide-react";
 import { PageHeader, EmptyState } from "@/components/page-header";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -14,9 +14,13 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import {
   listWebsites, listMembers, inviteMember, updateMember, removeMember,
 } from "@/lib/websites.functions";
+import {
+  listInvitations, createInvitation, revokeInvitation,
+} from "@/lib/invitations.functions";
 import { toast } from "sonner";
 
 export const Route = createFileRoute("/_authenticated/users")({
