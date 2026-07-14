@@ -85,7 +85,20 @@ function UsersPage() {
               </Button>
             ))}
           </div>
-          {active ? <MembersCard websiteId={active} /> : null}
+          {active ? (
+            <Tabs defaultValue="members" className="w-full">
+              <TabsList>
+                <TabsTrigger value="members">Members</TabsTrigger>
+                <TabsTrigger value="invitations">Invitations</TabsTrigger>
+              </TabsList>
+              <TabsContent value="members" className="mt-4">
+                <MembersCard websiteId={active} />
+              </TabsContent>
+              <TabsContent value="invitations" className="mt-4">
+                <InvitationsCard websiteId={active} />
+              </TabsContent>
+            </Tabs>
+          ) : null}
         </>
       )}
     </div>
