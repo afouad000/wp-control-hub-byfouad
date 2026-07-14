@@ -65,11 +65,11 @@ function AuthPage() {
         });
         if (error) throw error;
         toast.success("Account created. You're signed in.");
-        navigate({ to: "/dashboard", replace: true });
+        navigate({ to: nextPath, replace: true });
       } else {
         const { error } = await supabase.auth.signInWithPassword({ email, password });
         if (error) throw error;
-        navigate({ to: "/dashboard", replace: true });
+        navigate({ to: nextPath, replace: true });
       }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Authentication failed");
@@ -89,7 +89,7 @@ function AuthPage() {
       return;
     }
     if (result.redirected) return;
-    navigate({ to: "/dashboard", replace: true });
+    navigate({ to: nextPath, replace: true });
   };
 
   return (
