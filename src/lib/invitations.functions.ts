@@ -122,11 +122,22 @@ export const createInvitation = createServerFn({ method: "POST" })
     assertAuthenticatedContext(context);
     await requirePermission(context, data.website_id, "manage_team");
 
+    // Ad-hoc rate limit: 30 invitations/hour per user across all sites.
+    await enforceRateLimit({
+      supabase: context.supabase,
+      userId: context.userId,
+      key: "invitation:create",
+      max: 30,
+      windowSeconds: 3600,
+    });
+
     const email = data.email.toLowerCase();
     const permissions = data.permissions ?? makePreset(data.role);
     const token = generateInvitationToken();
+    const tokenHash = await sha256Hex(token);
 
-    // Revoke any prior pending invite for the same email+website so listings stay clean.
+    // Revoke any prior pending invite for the same email+website so the
+    // partial-unique index (`one_pending_per_email`) doesn't reject the insert.
     await context.supabase
       .from("website_invitations")
       .update({ revoked_at: new Date().toISOString() })
@@ -135,6 +146,8 @@ export const createInvitation = createServerFn({ method: "POST" })
       .is("accepted_at", null)
       .is("revoked_at", null);
 
+    // Note: we intentionally do NOT persist the raw `token`. Only `token_hash`
+    // is stored. The raw token is returned exactly once, to the inviter.
     const { data: inserted, error } = await context.supabase
       .from("website_invitations")
       .insert({
@@ -143,9 +156,10 @@ export const createInvitation = createServerFn({ method: "POST" })
         role: data.role,
         permissions,
         invited_by: context.userId,
-        token,
+        token_hash: tokenHash,
+        // `token` column still exists (nullable) for backward compat; leave null.
       })
-      .select("id, token, expires_at")
+      .select("id, expires_at")
       .single();
     if (error) throw new Error(friendlyDbError(error, "Could not create invitation."));
 
@@ -161,10 +175,11 @@ export const createInvitation = createServerFn({ method: "POST" })
     return {
       ok: true as const,
       id: inserted.id as string,
-      token: inserted.token as string,
+      token, // raw token, returned once for the inviter to share.
       expires_at: inserted.expires_at as string,
     };
   });
+
 
 export const revokeInvitation = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
