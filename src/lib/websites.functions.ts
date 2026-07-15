@@ -165,7 +165,7 @@ export const connectWebsite = createServerFn({ method: "POST" })
     // 2) Mark probing → probe → store creds only on success.
     await context.supabase
       .from("websites")
-      .update({ provisioning_state: "probing" })
+      .update({ provisioning_state: "probing" } as never)
       .eq("id", inserted.id);
 
     const probe = await probeSite(
@@ -226,22 +226,26 @@ export const connectWebsite = createServerFn({ method: "POST" })
     }
 
     // 4) Finalize: mark provisioned with real status + meta.
+    const finalizeUpdate = {
+      status: "connected",
+      connection_status: probe.info.woocommerce ? "connected" : "connected_no_wc",
+      provisioning_state: "provisioned",
+      last_checked_at: new Date().toISOString(),
+      last_error: null,
+      meta: probe.info,
+    } as never;
     const { data: finalized, error: finErr } = await context.supabase
       .from("websites")
-      .update({
-        status: "connected",
-        connection_status: probe.info.woocommerce ? "connected" : "connected_no_wc",
-        provisioning_state: "provisioned",
-        last_checked_at: new Date().toISOString(),
-        last_error: null,
-        meta: probe.info,
-      })
+      .update(finalizeUpdate)
       .eq("id", inserted.id)
       .select(PUBLIC_COLUMNS)
       .single();
-    if (finErr) {
+    if (finErr || !finalized) {
       await rollback(friendlyDbError(finErr, "Could not finalize the connection. Please retry."));
+      // rollback throws, but TS doesn't know — help it out.
+      throw new Error("unreachable");
     }
+
 
     await context.supabase.from("audit_logs").insert([
       {
