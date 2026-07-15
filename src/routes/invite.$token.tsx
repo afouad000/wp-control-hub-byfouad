@@ -16,10 +16,14 @@ export const Route = createFileRoute("/invite/$token")({
       { title: "Team invitation — WP Control Hub" },
       { name: "description", content: "Accept your WP Control Hub team invitation." },
       { name: "robots", content: "noindex, nofollow" },
+      // Prevent the token from leaking to third parties when the user
+      // clicks any outbound link on this page.
+      { name: "referrer", content: "no-referrer" },
     ],
   }),
   component: InvitePage,
 });
+
 
 function InvitePage() {
   const { token } = Route.useParams();
