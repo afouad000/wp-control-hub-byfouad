@@ -253,8 +253,9 @@ export const connectWebsite = createServerFn({ method: "POST" })
         website_id: inserted.id,
         action: "website.connected",
         details: {
-          url: finalized!.url,
-          name: finalized!.name,
+          url: finalized.url,
+          name: finalized.name,
+
           woocommerce: probe.info.woocommerce ?? false,
           theme: probe.info.theme ?? null,
           plugins_count: probe.info.plugins_count ?? null,
