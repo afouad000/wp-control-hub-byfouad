@@ -120,23 +120,27 @@ export const connectWebsite = createServerFn({ method: "POST" })
 
     // 1) Insert the row in `pending` state FIRST so we own an id we can
     //    clean up on any failure below.
+    const insertPayload = {
+      owner_id: context.userId,
+      name: data.name,
+      url: data.url.replace(/\/$/, ""),
+      client_name: data.client_name ?? null,
+      logo_url: data.logo_url ?? null,
+      status: "pending",
+      connection_status: "pending",
+      // Cast: provisioning_state was added by the Phase 1 migration and may
+      // not yet be present in the generated types.ts snapshot.
+      provisioning_state: "pending",
+      last_checked_at: startedAt,
+      last_error: null,
+      meta: {},
+    } as never;
     const { data: inserted, error } = await context.supabase
       .from("websites")
-      .insert({
-        owner_id: context.userId,
-        name: data.name,
-        url: data.url.replace(/\/$/, ""),
-        client_name: data.client_name ?? null,
-        logo_url: data.logo_url ?? null,
-        status: "pending",
-        connection_status: "pending",
-        provisioning_state: "pending",
-        last_checked_at: startedAt,
-        last_error: null,
-        meta: {},
-      })
-      .select(PUBLIC_COLUMNS + ", provisioning_state")
+      .insert(insertPayload)
+      .select(PUBLIC_COLUMNS)
       .single();
+
 
     if (error) {
       console.error("[connectWebsite] insert failed", {
