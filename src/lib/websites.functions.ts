@@ -3,6 +3,8 @@ import { z } from "zod";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { assertAuthenticatedContext, friendlyDbError, requirePermission, type Permission } from "./server-guards";
 import { safeFetch, assertSafeUrl, SafeFetchAbortError } from "./safe-fetch";
+import { enforceRateLimit } from "./rate-limit";
+
 
 const PUBLIC_COLUMNS =
   "id, owner_id, name, url, client_name, logo_url, status, connection_status, last_checked_at, last_error, meta, created_at, updated_at";
@@ -85,7 +87,17 @@ export const getWebsite = createServerFn({ method: "GET" })
 export const testConnection = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d) => TestInput.parse(d))
-  .handler(async ({ data }) => {
+  .handler(async ({ data, context }) => {
+    assertAuthenticatedContext(context);
+    // Rate limit: 20 test probes / 10 min / user. Test connection can be
+    // used to probe arbitrary WordPress hosts — throttle abuse.
+    await enforceRateLimit({
+      supabase: context.supabase,
+      userId: context.userId,
+      key: "website:test_connection",
+      max: 20,
+      windowSeconds: 600,
+    });
     return probeSite(data.url, data.wp_username, data.wp_app_password, data.wc_consumer_key, data.wc_consumer_secret);
   });
 
@@ -95,40 +107,79 @@ export const connectWebsite = createServerFn({ method: "POST" })
   .handler(async ({ data, context }) => {
     assertAuthenticatedContext(context);
 
-    const probe = await probeSite(data.url, data.wp_username, data.wp_app_password, data.wc_consumer_key, data.wc_consumer_secret);
-    if (!probe.ok) {
-      throw new Error(probe.error ?? "Connection test failed — credentials not saved.");
-    }
+    // Rate limit: 10 new connections / hour / user.
+    await enforceRateLimit({
+      supabase: context.supabase,
+      userId: context.userId,
+      key: "website:connect",
+      max: 10,
+      windowSeconds: 3600,
+    });
 
     const startedAt = new Date().toISOString();
+
+    // 1) Insert the row in `pending` state FIRST so we own an id we can
+    //    clean up on any failure below.
+    const insertPayload = {
+      owner_id: context.userId,
+      name: data.name,
+      url: data.url.replace(/\/$/, ""),
+      client_name: data.client_name ?? null,
+      logo_url: data.logo_url ?? null,
+      status: "pending",
+      connection_status: "pending",
+      // Cast: provisioning_state was added by the Phase 1 migration and may
+      // not yet be present in the generated types.ts snapshot.
+      provisioning_state: "pending",
+      last_checked_at: startedAt,
+      last_error: null,
+      meta: {},
+    } as never;
     const { data: inserted, error } = await context.supabase
       .from("websites")
-      .insert({
-        owner_id: context.userId,
-        name: data.name,
-        url: data.url.replace(/\/$/, ""),
-        client_name: data.client_name ?? null,
-        logo_url: data.logo_url ?? null,
-        status: "connected",
-        connection_status: probe.info.woocommerce ? "connected" : "connected_no_wc",
-        last_checked_at: startedAt,
-        last_error: null,
-        meta: probe.info,
-      })
+      .insert(insertPayload)
       .select(PUBLIC_COLUMNS)
       .single();
+
 
     if (error) {
       console.error("[connectWebsite] insert failed", {
         userId: context.userId,
         code: (error as { code?: string }).code,
         message: error.message,
-        hint: (error as { hint?: string }).hint,
       });
       throw new Error(friendlyDbError(error, "Could not save the website. Please try again."));
     }
 
-    // Persist credentials to private schema via service role RPC
+    const rollback = async (reason: string) => {
+      // Best-effort cleanup: mark failed, then delete. RLS restricts to
+      // rows this user owns, so this cannot touch someone else's site.
+      try {
+        await context.supabase.from("websites").delete().eq("id", inserted.id);
+      } catch (e) {
+        console.error("[connectWebsite] rollback delete failed", { id: inserted.id, error: e });
+      }
+      throw new Error(reason);
+    };
+
+    // 2) Mark probing → probe → store creds only on success.
+    await context.supabase
+      .from("websites")
+      .update({ provisioning_state: "probing" } as never)
+      .eq("id", inserted.id);
+
+    const probe = await probeSite(
+      data.url,
+      data.wp_username,
+      data.wp_app_password,
+      data.wc_consumer_key,
+      data.wc_consumer_secret,
+    );
+    if (!probe.ok) {
+      await rollback(probe.error ?? "Connection test failed — credentials not saved.");
+    }
+
+    // 3) Persist credentials to private schema via service role RPC.
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
     const { error: credErr } = await supabaseAdmin.rpc("set_website_credentials_admin", {
       _website_id: inserted.id,
@@ -139,7 +190,7 @@ export const connectWebsite = createServerFn({ method: "POST" })
     });
     if (credErr) {
       console.error("[connectWebsite] credentials insert failed", { websiteId: inserted.id, message: credErr.message });
-      throw new Error("Saved the website but could not store credentials securely. Please retry.");
+      await rollback("Could not store credentials securely. Please retry.");
     }
 
     const memberStartedAt = new Date().toISOString();
@@ -168,12 +219,33 @@ export const connectWebsite = createServerFn({ method: "POST" })
         console.error("[connectWebsite] member insert failed", {
           websiteId: inserted.id,
           userId: context.userId,
-          code: (memberError as { code?: string }).code,
           message: memberError.message,
         });
-        throw new Error(friendlyDbError(memberError, "Saved the website but could not register ownership. Please retry."));
+        await rollback(friendlyDbError(memberError, "Could not register ownership. Please retry."));
       }
     }
+
+    // 4) Finalize: mark provisioned with real status + meta.
+    const finalizeUpdate = {
+      status: "connected",
+      connection_status: probe.info.woocommerce ? "connected" : "connected_no_wc",
+      provisioning_state: "provisioned",
+      last_checked_at: new Date().toISOString(),
+      last_error: null,
+      meta: probe.info,
+    } as never;
+    const { data: finalized, error: finErr } = await context.supabase
+      .from("websites")
+      .update(finalizeUpdate)
+      .eq("id", inserted.id)
+      .select(PUBLIC_COLUMNS)
+      .single();
+    if (finErr || !finalized) {
+      await rollback(friendlyDbError(finErr, "Could not finalize the connection. Please retry."));
+      // rollback throws, but TS doesn't know — help it out.
+      throw new Error("unreachable");
+    }
+
 
     await context.supabase.from("audit_logs").insert([
       {
@@ -181,8 +253,9 @@ export const connectWebsite = createServerFn({ method: "POST" })
         website_id: inserted.id,
         action: "website.connected",
         details: {
-          url: inserted.url,
-          name: inserted.name,
+          url: finalized.url,
+          name: finalized.name,
+
           woocommerce: probe.info.woocommerce ?? false,
           theme: probe.info.theme ?? null,
           plugins_count: probe.info.plugins_count ?? null,
@@ -199,19 +272,34 @@ export const connectWebsite = createServerFn({ method: "POST" })
           permission: "owner",
           auto_created: true,
           already_existed: alreadyExisted,
-          started_at: memberStartedAt,
-          completed_at: new Date().toISOString(),
         },
       },
     ]);
 
-    return { website: inserted, probe };
+    return { website: finalized, probe };
   });
 
 export const reconnectWebsite = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d) => ReconnectInput.parse(d))
   .handler(async ({ data, context }) => {
+    assertAuthenticatedContext(context);
+
+    // AUTHORIZATION FIRST — never probe an external host until we've confirmed
+    // the caller has permission to manage this website. Otherwise a signed-in
+    // user could turn our worker into an SSRF cannon against arbitrary hosts.
+    // Order: auth (middleware) → access + permission → probe → write.
+    await requirePermission(context, data.id, "manage_website_settings");
+
+    // Rate limit: 20 reconnects / hour / user.
+    await enforceRateLimit({
+      supabase: context.supabase,
+      userId: context.userId,
+      key: "website:reconnect",
+      max: 20,
+      windowSeconds: 3600,
+    });
+
     const probe = await probeSite(data.url, data.wp_username, data.wp_app_password, data.wc_consumer_key, data.wc_consumer_secret);
     if (!probe.ok) {
       await context.supabase
@@ -224,16 +312,7 @@ export const reconnectWebsite = createServerFn({ method: "POST" })
         .eq("id", data.id);
       throw new Error(probe.error ?? "Test failed — credentials not updated.");
     }
-    // First verify access via user-scoped client (RLS will block if not owner/no access)
-    const { data: accessCheck, error: accessErr } = await context.supabase
-      .from("websites")
-      .select("id, owner_id")
-      .eq("id", data.id)
-      .maybeSingle();
-    if (accessErr) throw new Error(accessErr.message);
-    if (!accessCheck) throw new Error("Website not found or access denied.");
 
-    // Update non-sensitive fields on public.websites
     const { error } = await context.supabase
       .from("websites")
       .update({
@@ -247,7 +326,6 @@ export const reconnectWebsite = createServerFn({ method: "POST" })
       .eq("id", data.id);
     if (error) throw new Error(error.message);
 
-    // Update credentials in the private schema via service role
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
     const { error: credErr } = await supabaseAdmin.rpc("set_website_credentials_admin", {
       _website_id: data.id,
@@ -265,6 +343,7 @@ export const reconnectWebsite = createServerFn({ method: "POST" })
     });
     return probe;
   });
+
 
 export const updateWebsite = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
