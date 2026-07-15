@@ -3,6 +3,8 @@ import { z } from "zod";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { assertAuthenticatedContext, friendlyDbError, requirePermission, type Permission } from "./server-guards";
 import { safeFetch, assertSafeUrl, SafeFetchAbortError } from "./safe-fetch";
+import { enforceRateLimit } from "./rate-limit";
+
 
 const PUBLIC_COLUMNS =
   "id, owner_id, name, url, client_name, logo_url, status, connection_status, last_checked_at, last_error, meta, created_at, updated_at";
