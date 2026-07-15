@@ -73,6 +73,30 @@ export type Database = {
           },
         ]
       }
+      idempotency_keys: {
+        Row: {
+          created_at: string
+          expires_at: string
+          key: string
+          response: Json
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          expires_at?: string
+          key: string
+          response?: Json
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          expires_at?: string
+          key?: string
+          response?: Json
+          user_id?: string
+        }
+        Relationships: []
+      }
       profiles: {
         Row: {
           avatar_url: string | null
@@ -97,6 +121,27 @@ export type Database = {
           full_name?: string | null
           id?: string
           updated_at?: string
+        }
+        Relationships: []
+      }
+      rate_limit_events: {
+        Row: {
+          created_at: string
+          id: string
+          key: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          key: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          key?: string
+          user_id?: string
         }
         Relationships: []
       }
@@ -130,7 +175,8 @@ export type Database = {
           permissions: Json
           revoked_at: string | null
           role: string
-          token: string
+          token: string | null
+          token_hash: string | null
           updated_at: string
           website_id: string
         }
@@ -145,7 +191,8 @@ export type Database = {
           permissions?: Json
           revoked_at?: string | null
           role?: string
-          token: string
+          token?: string | null
+          token_hash?: string | null
           updated_at?: string
           website_id: string
         }
@@ -160,7 +207,8 @@ export type Database = {
           permissions?: Json
           revoked_at?: string | null
           role?: string
-          token?: string
+          token?: string | null
+          token_hash?: string | null
           updated_at?: string
           website_id?: string
         }
@@ -248,6 +296,7 @@ export type Database = {
           meta: Json
           name: string
           owner_id: string
+          provisioning_state: Database["public"]["Enums"]["website_provisioning_state"]
           status: string
           updated_at: string
           url: string
@@ -263,6 +312,7 @@ export type Database = {
           meta?: Json
           name: string
           owner_id?: string
+          provisioning_state?: Database["public"]["Enums"]["website_provisioning_state"]
           status?: string
           updated_at?: string
           url: string
@@ -278,6 +328,7 @@ export type Database = {
           meta?: Json
           name?: string
           owner_id?: string
+          provisioning_state?: Database["public"]["Enums"]["website_provisioning_state"]
           status?: string
           updated_at?: string
           url?: string
@@ -353,6 +404,11 @@ export type Database = {
     }
     Enums: {
       app_role: "super_admin" | "client" | "team_member"
+      website_provisioning_state:
+        | "pending"
+        | "probing"
+        | "provisioned"
+        | "failed"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -481,6 +537,12 @@ export const Constants = {
   public: {
     Enums: {
       app_role: ["super_admin", "client", "team_member"],
+      website_provisioning_state: [
+        "pending",
+        "probing",
+        "provisioned",
+        "failed",
+      ],
     },
   },
 } as const
